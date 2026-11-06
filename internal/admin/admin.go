@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MMagTech/cabinet-linkup/internal/link"
 	"github.com/MMagTech/cabinet-linkup/internal/logfile"
 	"github.com/MMagTech/cabinet-linkup/internal/relay"
 	"github.com/MMagTech/cabinet-linkup/internal/store"
@@ -45,11 +46,7 @@ type People interface {
 }
 
 // LinkState is how a link is doing right now.
-type LinkState struct {
-	Reachable    bool
-	BehindTheirs bool
-	BehindOurs   bool
-}
+type LinkState = link.State
 
 // Links is what the page needs from the links to other servers.
 type Links interface {

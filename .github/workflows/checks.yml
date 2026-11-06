@@ -1,0 +1,45 @@
+# Every pull request and every push to main: format, vet, the tests with the race detector,
+# known holes in the program's own dependencies, a build for each architecture, and the real
+# image with stand-in consoles against it.
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Format
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: Vet
+        run: go vet ./...
+      - name: Tests
+        run: go test -race -count=1 ./...
+      - name: Known holes
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Build amd64 and arm64
+        run: |
+          GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/cabinet-linkup
+          GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/cabinet-linkup
+
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build the image
+        run: docker build -t cabinet-linkup:ci .
+      - name: Two linked containers and stand-in consoles
+        run: ./ci/run-containers.sh cabinet-linkup:ci

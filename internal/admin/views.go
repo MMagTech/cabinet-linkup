@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/MMagTech/cabinet-linkup/internal/link"
 	"github.com/MMagTech/cabinet-linkup/internal/store"
 	"github.com/MMagTech/cabinet-linkup/internal/update"
 )
@@ -211,7 +212,7 @@ func (a *App) peopleView(selected string) peopleView {
 func (a *App) linkRow(st *store.State, l store.Link, selected string) linkView {
 	state := a.Links.State(l.ID)
 	v := linkView{
-		ID: l.ID, Name: l.Name, Address: l.Address, Since: rfc(l.Failing), Reachable: state.Reachable,
+		ID: l.ID, Name: l.Name, Address: link.DisplayAddress(l), Since: rfc(l.Failing), Reachable: state.Reachable,
 		BehindTheirs: state.BehindTheirs, BehindOurs: state.BehindOurs, Behind: state.BehindTheirs || state.BehindOurs,
 		Current: l.ID == selected,
 	}

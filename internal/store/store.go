@@ -76,19 +76,26 @@ type Pair struct {
 	TheirName   string
 	TheirKey    []byte
 	TheirStream int
+	Added       time.Time
 }
 
 // Link is another server.
 type Link struct {
-	ID       string
-	Number   int
-	Name     string
-	Address  string
-	Key      []byte
-	Pairs    []Pair
-	Failing  time.Time // when it stopped answering, zero while it answers
-	Protocol int       // the last it stated
-	Oldest   int
+	ID      string
+	Number  int
+	Name    string
+	Address string
+	Key     []byte
+	Pairs   []Pair
+	Failing time.Time // when it stopped answering, zero while it answers
+
+	// An address this server was told is only a candidate until an Open proves it. Typed says the
+	// owner typed Address, and ProvedPrivate that it led to a private address when it was proved:
+	// only those may lead to a private address.
+	Candidate      string
+	CandidateTried time.Time
+	Typed          bool
+	ProvedPrivate  bool
 }
 
 // The kinds of code.

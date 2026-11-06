@@ -3,6 +3,7 @@ module github.com/MMagTech/cabinet-linkup
 go 1.27
 
 require (
+	github.com/flynn/noise v1.1.0
 	github.com/pion/logging v0.2.4
 	github.com/pion/turn/v4 v4.1.4
 	golang.org/x/crypto v0.32.0

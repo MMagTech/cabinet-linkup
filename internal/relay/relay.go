@@ -15,6 +15,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -42,6 +43,8 @@ const (
 	longestSession = 24 * time.Hour
 	// One session's two consoles need one connection each, and a retry may need another.
 	connectionsPerSession = 4
+	// How many addresses one connection can send to.
+	peersPerConnection = 8
 
 	// Each connection's cap: the console's stream asks for 18 Mbit/s, and the hardware
 	// reaches 23 to 25 for a second at a time.
@@ -107,10 +110,12 @@ type Service struct {
 	address    net.IP
 	period     time.Time
 	games      int
-	admitted   map[string]bool      // username and source of a connection that has started
-	ended      map[string]time.Time // sessions the server has seen end
-	conns      map[int]*metered     // by relay port
-	allocs     map[string]int       // live connections per username
+	addressNow atomic.Pointer[net.IP]
+	admitted   map[string]bool            // username and source of a connection that has started
+	ended      map[string]time.Time       // sessions the server has seen end, by tag
+	conns      map[int]*metered           // by relay port
+	allocs     map[string]int             // live connections per username
+	peers      map[string]map[string]bool // peer addresses per client
 	testFailed bool
 	loggedFull bool
 	cancel     context.CancelFunc
@@ -124,6 +129,7 @@ func New(cfg Config, st *store.Store, log *logfile.Log) *Service {
 		ended:    map[string]time.Time{},
 		conns:    map[int]*metered{},
 		allocs:   map[string]int{},
+		peers:    map[string]map[string]bool{},
 	}
 	st.View(func(state *store.State) { s.secret = state.RelaySecret })
 	var c counts
@@ -236,6 +242,7 @@ func (s *Service) stopLocked() {
 	s.admitted = map[string]bool{}
 	s.conns = map[int]*metered{}
 	s.allocs = map[string]int{}
+	s.peers = map[string]map[string]bool{}
 	s.log.RelayOff()
 }
 
@@ -366,9 +373,8 @@ func (s *Service) Credentials(session string) (Credentials, error) {
 	}
 	s.mu.Lock()
 	host := s.foundLocked()
-	delete(s.ended, session)
 	s.mu.Unlock()
-	username := strconv.FormatInt(time.Now().Unix(), 10) + "." + session
+	username := strconv.FormatInt(time.Now().Unix(), 10) + "." + s.tag(session)
 	return Credentials{URLs: []string{"turn:" + host + "?transport=udp"}, Username: username, Password: s.password(username)}, nil
 }
 
@@ -376,16 +382,17 @@ func (s *Service) Credentials(session string) (Credentials, error) {
 // session end.
 func (s *Service) EndSession(session string) {
 	now := time.Now()
+	tag := s.tag(session)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.ended[session] = now
+	s.ended[tag] = now
 	for key := range s.admitted {
-		if name, _, ok := strings.Cut(key, "|"); ok && sessionOf(name) == session {
+		if name, _, ok := strings.Cut(key, "|"); ok && tagOf(name) == tag {
 			delete(s.admitted, key)
 		}
 	}
 	for _, c := range s.conns {
-		if sessionOf(c.username()) == session {
+		if tagOf(c.username()) == tag {
 			c.stopped.Store(true)
 		}
 	}
@@ -402,9 +409,16 @@ func (s *Service) password(username string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func sessionOf(username string) string {
-	_, session, _ := strings.Cut(username, ".")
-	return session
+// tag stands for a session in a username, which travels in clear on UDP.
+func (s *Service) tag(session string) string {
+	mac := hmac.New(sha256.New, s.secret)
+	mac.Write([]byte("relay session\x00" + session))
+	return hex.EncodeToString(mac.Sum(nil)[:8])
+}
+
+func tagOf(username string) string {
+	_, tag, _ := strings.Cut(username, ".")
+	return tag
 }
 
 // auth gives Pion the key to check a request's signature with. A new connection gets it
@@ -413,9 +427,9 @@ func (s *Service) auth(username, _ string, src net.Addr) ([]byte, bool) {
 	if !s.running.Load() || s.full.Load() {
 		return nil, false
 	}
-	issuedText, session, ok := strings.Cut(username, ".")
+	issuedText, tag, ok := strings.Cut(username, ".")
 	issued, err := strconv.ParseInt(issuedText, 10, 64)
-	if !ok || err != nil || session == "" {
+	if !ok || err != nil || tag == "" {
 		return nil, false
 	}
 	age := time.Since(time.Unix(issued, 0))
@@ -423,7 +437,7 @@ func (s *Service) auth(username, _ string, src net.Addr) ([]byte, bool) {
 		return nil, false
 	}
 	s.mu.Lock()
-	_, ended := s.ended[session]
+	_, ended := s.ended[tag]
 	started := s.admitted[username+"|"+src.String()]
 	s.mu.Unlock()
 	if ended || age > longestSession || (!started && age > newConnectionWindow) {
@@ -438,8 +452,24 @@ func (s *Service) quota(username, _ string, _ net.Addr) bool {
 	return s.allocs[username] < connectionsPerSession
 }
 
-func (s *Service) permit(_ net.Addr, peer net.IP) bool {
-	return s.cfg.AllowPrivate || !Blocked(peer)
+// permit decides who a connection may send to: nothing private, and a few peers. A console has
+// only a handful of public addresses, and this makes the relay no use for reaching anyone else.
+func (s *Service) permit(client net.Addr, peer net.IP) bool {
+	if !s.cfg.AllowPrivate && Blocked(peer) {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	known := s.peers[client.String()]
+	if known == nil {
+		known = map[string]bool{}
+		s.peers[client.String()] = known
+	}
+	if !known[peer.String()] && len(known) >= peersPerConnection {
+		return false
+	}
+	known[peer.String()] = true
+	return true
 }
 
 func (s *Service) events() turn.EventHandler {
@@ -467,6 +497,7 @@ func (s *Service) events() turn.EventHandler {
 				delete(s.allocs, username)
 			}
 			delete(s.admitted, username+"|"+src.String())
+			delete(s.peers, src.String())
 		},
 		OnPermissionCreated: func(_, _ net.Addr, _, _, _ string, relayAddr net.Addr, peer net.IP) {
 			s.mu.Lock()
@@ -638,10 +669,23 @@ func (m *metered) ReadFrom(p []byte) (int, net.Addr, error) {
 }
 
 func (m *metered) WriteTo(p []byte, addr net.Addr) (int, error) {
-	if !m.allow(len(p)) {
+	if !m.s.sendable(addr) || !m.allow(len(p)) {
 		return len(p), nil
 	}
 	return m.PacketConn.WriteTo(p, addr)
+}
+
+// sendable refuses ports under 1024, and the owner's own public address except on the relay's own
+// ports: it leads to every port the owner forwards, and two consoles can share one relay.
+func (s *Service) sendable(addr net.Addr) bool {
+	a, ok := addr.(*net.UDPAddr)
+	if !ok || a.Port < 1024 {
+		return false
+	}
+	if own := s.addressNow.Load(); own != nil && a.IP.Equal(*own) {
+		return a.Port == s.cfg.Port || (a.Port >= s.cfg.PortMin && a.Port <= s.cfg.PortMax)
+	}
+	return true
 }
 
 // quiet keeps Pion's own log out of Docker's: it would print internet addresses.
@@ -673,6 +717,7 @@ var privateRanges = []netip.Prefix{
 	netip.MustParsePrefix("198.51.100.0/24"),
 	netip.MustParsePrefix("203.0.113.0/24"),
 	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/96"),
 	netip.MustParsePrefix("64:ff9b::/96"),
 	netip.MustParsePrefix("64:ff9b:1::/48"),
 	netip.MustParsePrefix("100::/64"),
@@ -753,6 +798,11 @@ func (s *Service) setAddress(ip net.IP) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.address = ip
+	if ip == nil {
+		s.addressNow.Store(nil)
+	} else {
+		s.addressNow.Store(&ip)
+	}
 }
 
 func (s *Service) fromName(host string) net.IP {
@@ -829,7 +879,7 @@ func (s *Service) Test() (time.Duration, error) {
 }
 
 func (s *Service) test() (time.Duration, error) {
-	creds, err := s.Credentials("selftest")
+	creds, err := s.Credentials(store.NewID())
 	if err != nil {
 		return 0, err
 	}

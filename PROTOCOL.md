@@ -14,19 +14,25 @@ plain IP, IPv6 or a VPN address. So the protocol holds to three requirements:
 2. **It works behind a reverse proxy**, which may read and rewrite anything it
    carries, and which holds no key.
 3. **A fake server cannot pass.** Someone sitting between a console and its
-   server, or posing as the server at its address, cannot pose as either side.
+   server, or posing as the server at its address, cannot pose as either side,
+   unless they hold the code. A code travels in an ordinary message, so whoever
+   holds it can use it first and take that place, or sit in the middle of that one
+   pairing. It works once, and the owner sees the username on the People list and
+   can remove them.
 
 And two more that follow from those:
 
 4. **The code never travels.** Only a proof made from a slow hash of it does.
 5. **Everything is encrypted, every message.** HTTP here is only a way of moving
-   sealed bytes. Whoever watches the wire sees sizes, times and addresses, and
-   nothing else: no code, username, friend, game or connection detail.
+   sealed bytes. Whoever watches the wire sees sizes, times, addresses, what kind
+   of message each is, its session id, its counter and its status, and nothing
+   else: no code, username, friend, game or connection detail.
 
 **What this does not protect against.** A server that has been broken into can
 read what passes through it apart from what consoles seal for each other, and can
-hand out a false key or false connection details. That is accepted (see "What a
-hacked server gets"). It never holds a RomM login.
+hand out a false key or false connection details. So can a linked owner, or a break-in
+at a linked server, for the people it hosts. That is accepted (see "What a hacked server
+gets"). A server never holds a RomM login.
 
 ## Version numbers
 
@@ -55,8 +61,10 @@ Everything is one HTTP request: `POST <base>/linkup/v1`, body and answer
 | A host alone | `https://host`, then `http://host` |
 
 An IPv6 address is in brackets. A path after the host is kept, for a proxy. A
-certificate adds nothing to the protocol's safety, so a reader need not check
-one: a self-signed proxy works.
+certificate is not what makes this safe, so a reader need not check one, and a
+self-signed proxy works. TLS only hides the kind of each message from a watcher.
+
+A reader never follows a redirect, and takes `http` and `https` only.
 
 The body's first byte says what it is:
 
@@ -71,14 +79,15 @@ The answers that are not 200, all with an empty body:
 
 | Status | Meaning |
 |---|---|
-| 403 | Pair, first: no waiting code matches. The console says "Wrong or expired code". |
-| 429 | Pair: too many tries. The console says "Too many tries". |
-| 404 | Everything else, including every other path, method and malformed body, an Open from a key this server does not know, and an unknown or closed session. |
+| 403 | Pair: no waiting code matches. The console says "Wrong or expired code". |
+| 429 | Pair: no waiting code matches and there have been too many tries, or the server is at its ceiling. The console says "Too many tries". |
+| 404 | Everything else, including every other path, method and malformed body, an Open from a key this server does not know, a replayed Open, and an unknown or closed session. |
 
 None of these is authenticated, so none of them can do more than make a console
-say it failed. A stranger learns only that something answers.
+say it failed. A stranger can tell this is a LinkUp server from a 403, and little more.
 
-A body is at most 64 KiB. Anything larger is 404.
+A request is at most 64 KiB and an answer at most 256 KiB. Anything larger is 404 from
+a server, and a reader stops reading.
 
 ## The code
 
@@ -90,9 +99,13 @@ stops at its expiry, 7 days after it was made.
 
 The slow hash, `K`:
 
-    K = Argon2id(password = the 12 characters,
-                 salt     = "cabinet-linkup code 1",
-                 time = 3, memory = 64 MiB, lanes = 1, length = 32 bytes)
+    K = Argon2id(version 0x13,
+                 password = the 12 characters,
+                 salt     = "cabinet-linkup 1", exactly 16 bytes,
+                 time = 3, memory = 65536 KiB, lanes = 1, length = 32 bytes)
+
+For `K7MR4QXT9HPV`, `K` is
+`c3c7e78d316b58eff025cd98473fc042a0ebd4ff209be27d491583c495e8b6ad`.
 
 The parameters are fixed by the protocol and are never negotiated, so a fake
 server cannot ask for a weaker hash. The salt is fixed because a console knows
@@ -100,6 +113,9 @@ only an address and a code before its first message, and the address it typed ma
 not be the one another console typed. The server works out `K` once, when the code
 is made, and keeps it beside the code. Checking a guess at the server therefore
 costs the guesser the slow hash and the server almost nothing.
+
+A code has one kind, set when it is made: a console's own, an invite, a reinstall or a
+link. The first three are used by a console and the last by a server.
 
 ## Pairing
 
@@ -109,29 +125,49 @@ that has the code and is joining is the initiator. Each side has one long-term
 X25519 key: a console makes its own the first time LinkUp is turned on, a server
 the first time it starts.
 
+The Noise spec wants a 256-bit pre-shared key, and `K` carries 57.7 bits of the code. This
+departs from it knowingly, and the only consequence is the offline guessing priced below. A
+real PAKE would turn that price from tens of billions of dollars into impossible, at the
+cost of a second protocol beside Noise, and of a public id for each code. These codes are
+random, used once and short-lived, so nothing here spends that margin.
+
     -> psk, e                 Pair, first. Empty payload.
-    <- e, ee, s, es           Answer. Payload: the server's hello.
+    <- e, ee, s, es           Answer. Payload: {"protocol":1,"oldest":1,"name":"Riley's"}
     -> s, se                  Pair, second. Payload: who is joining.
     <- (transport message)    Sealed reply: the result.
 
 - **Message 1 is the joiner's proof.** It ends in an authentication tag under a
-  key that depends on `K`. The server tries it against each waiting code's `K`
-  (cheap, since `K` is already worked out) and answers 403 if none fits. A stranger
-  without a code gets no key, no salt and no sign of what the server holds.
+  key that depends on `K`. It is exactly 48 bytes: the server refuses anything else
+  before trying it. The server tries it against each waiting code's `K` (cheap, since
+  `K` is already worked out) and answers 403 if none fits. A stranger without a code
+  gets no key and no salt. Message 1 can be replayed while its code lasts, which is why
+  a replay can take a slot only from its own code.
 - **Message 2 is the server's proof.** Its static key and payload are encrypted
   under a key that depends on `K` and on both ephemeral keys, so a fake server
   cannot make one, and a console that cannot open it stops and keeps nothing.
 - **Message 3 binds the joiner's key.** The server checks it, then uses up the code
-  under a lock, so the first to finish takes the place.
+  under a lock, so the first to finish takes the place. A joiner whose `kind` does not
+  fit the code's kind is refused and the code is not used. A key the server already
+  knows is refused unless the code is a reinstall code for that console, or the key is
+  a linked server adding a pair, or a console that was removed.
 - **Both long-term keys are hashed into the handshake,** so nobody can swap either
-  without `K`. Each side remembers the other's key only after the sealed reply.
+  without `K`. A joiner remembers the server's key only after the sealed reply. The
+  server saved the joiner's when it answered, and it cannot know the reply arrived, so it
+  keeps the reply's exact bytes for the rest of that pairing's 60 seconds and answers an
+  identical message 3 with them.
 
-A pairing in progress lives 60 seconds in memory, at most 32 at a time, oldest
-dropped first. At most 200 codes wait at once.
+The sealed reply is under the second key from Noise's Split, with nonce 0 and no
+associated data.
 
-**Rate limit.** Failed Pair attempts count, per source address and in total: 5 a
-minute per address, 30 a minute in all, then 429. Behind a reverse proxy all sources
-look alike, so the total is what holds there. Failures are logged as counts only.
+A pairing in progress lives 60 seconds in memory, at most 32 at a time and 4 per code,
+oldest dropped first. At most 200 codes wait at once.
+
+**Rate limit.** A message that fits a code always goes through. Only a failure counts, and
+the limit only ever changes its answer from 403 to 429: a stranger cannot lock a real code
+out. Failures count per source and in total: 5 a minute per public address (per /64 on IPv6),
+and 30 a minute in all. A private source, which is what a reverse proxy looks like, counts
+only in the total. A ceiling of 200 tries a second holds the work down whatever else
+happens. Failures are logged as counts only.
 
 **Offline guessing.** Whoever captures message 1, or a fake server that receives
 it, can try guesses at leisure, at one Argon2id per guess, over about 2^57.7 codes.
@@ -146,9 +182,11 @@ The payload of message 3 is JSON. A console:
     {"kind": "console", "protocol": 1, "oldest": 1, "stream": 1,
      "account": "<stable id>", "username": "alex"}
 
-`account` is a string the console picks that stays the same for that account on
-that console (RomM's user id). The server keeps it to recognise the account after
-a reinstall, and shows only `username`.
+`account` is a string the console picks that stays the same for that account on that
+console: a hash of the RomM server's identity and the account's id, so that the same small
+id on a different RomM server is a different person. The server looks it up only within one
+console, to recognise the account after a reinstall, and shows only `username`. Only a
+reinstall code moves a console to a new key.
 
 A server, linking:
 
@@ -156,10 +194,11 @@ A server, linking:
      "name": "Riley's", "address": "linkup.example.org:7845",
      "account": {"id": "<person id>", "username": "maya", "key": "<base64>", "stream": 1}}
 
-The reply is sealed under the transport keys, nonce 0 from responder to initiator:
+The reply:
 
     console: {"ok": true, "console": 3}
     server:  {"ok": true, "name": "Alex's", "account": {"id": ..., "username": ..., "key": ..., "stream": ...}}
+    refused: {"ok": false, "error": "wrong_code"}
 
 ## Sessions
 
@@ -169,18 +208,25 @@ key is what is checked, so a retyped address needs no new pairing.
 `Noise_IK_25519_ChaChaPoly_SHA256`, prologue `cabinet-linkup session 1`. The
 initiator already holds the responder's remembered key.
 
-    -> e, es, s, ss           Open. Payload: {"protocol":1,"oldest":1,"stream":1}
+    -> e, es, s, ss           Open. Payload: {"protocol":1,"oldest":1,"stream":1,"t":<t>}
     <- e, ee, se              Answer. Payload: {"session":"<16 hex>","protocol":1,"oldest":1}
+
+`t` is the larger of the time in nanoseconds since 1970 and one more than the last `t` this
+side sent, which it keeps on disk. The server keeps the highest `t` per key in memory and
+answers 404 to anything not above it, with no state kept.
 
 - **An unknown key gets 404,** the same as a malformed body. The console port holds
   nothing for a stranger.
 - **A key that was removed gets a real answer:** the payload is `{"removed": true}`
   and no session opens. Because it is inside the handshake it is authenticated, so
   a fake server cannot make a console say "Removed from the LinkUp server".
-- **Message 1 can be replayed by someone who recorded it, but it does no harm:** its
-  payload holds only version numbers and the replayer cannot read the answer. A new
-  session replaces the old only once its first Sealed request arrives, so a replay
-  cannot push a console off. The server keeps at most one unconfirmed session per key.
+- **A recorded Open is dropped,** by `t`, so it cannot keep replacing a session as a console
+  opens it. After a server restart, with the highest `t` gone, each old recording works at
+  most once more: its payload holds only version numbers, and the replayer cannot read the
+  answer. A new session replaces the old only once its first Sealed request arrives. The
+  server keeps at most one unconfirmed session per key.
+- **A key has one kind, set at pairing.** An `op` of the other kind answers
+  `{"error":"unknown"}`.
 
 A Sealed request:
 
@@ -188,12 +234,23 @@ A Sealed request:
                                                               nonce = counter,
                                                               ad = 4 | session | counter)
 
-Counters start at 1 and only go up. Requests can overtake each other (a long request
-and a short one), so the server keeps a window of the last 64 and refuses a repeat or
-anything older, with 404. The answer uses the other transport key, the same counter
-as its nonce, and `ad = 5 | session | counter`, so an answer cannot be moved to a
-different request, and each nonce is used once under each key because a request
-is answered once.
+The first output of Noise's Split is the initiator's send key. The nonce is Noise's own: four
+zero bytes and then the counter, little endian. On the wire the counter is big endian.
+
+Counters start at 1 and only go up, and 0 and 2^64-1 are refused. Requests can overtake each
+other (a long request and a short one), so the server keeps a window of the last 64 and
+refuses a repeat or anything older, with 404. The answer uses the other transport key, the
+same counter as its nonce, and `ad = 5 | session | counter`, so an answer cannot be moved to a
+different request.
+
+Each nonce is used once under each key because of three rules:
+
+- **A server checks in this order:** known session, then under the session's lock the
+  window, the authentication tag, and marking the counter. It marks the counter before it
+  does the work, so two copies sent at once get one answer. A request failing any step changes
+  nothing, not the window and not the idle timer.
+- **A sender uses up a counter when it seals.** A retry is the same bytes or a new counter.
+- **Sessions are never saved to disk.**
 
 A session closes after 120 seconds with no request. Any answer that is not 200 means:
 open a new session, with a growing wait between tries, up to 60 seconds. A restart of
@@ -206,14 +263,26 @@ name, and the connection details) is sealed for the other console, in the one-wa
 pattern `Noise_K_25519_ChaChaPoly_SHA256`, with the prologue
 `cabinet-linkup box 1 ` followed by the invite's id:
 
-    -> e, es, ss              Payload: JSON the two consoles agree on.
+    -> e, es, ss              Payload: JSON, below.
 
-The server sees base64 and passes it on. The first box of an invite states
-`stream`. A console drops a box whose prologue or sender does not fit.
+The inviter picks the invite's id, 16 random bytes as hex, before it seals anything, and sends
+it in `invite`, so the first box is bound to it too. The server refuses an id it has already
+seen, unless it is the same inviter with the same box, so a retry after a lost answer is safe.
+
+The server sees base64 and passes it on. Noise_K has no replay protection, so a box says:
+
+    {"type": "invite" or "signal", "n": <counts up per sender and invite>, "expires": <seconds
+     since 1970>, "from": "<sender's username>", "to": "<recipient's username>", ...}
+
+An invite box also holds `stream` and the game's name, and a signal box the connection details. A
+console drops a box whose prologue or sender does not fit, whose `n` it has seen, whose `expires`
+has passed, or whose `type` is not what it expected. It caps a game's name on receipt and strips
+control and direction-changing characters, because the server cannot filter what it cannot read.
 
 **The limit.** A console learns a friend's key from its server. A server that has been
 broken into could hand out its own key and read the boxes; the two consoles do not
-check each other's keys another way.
+check each other's keys another way. A later theft of a console's key opens recorded boxes
+addressed to it.
 
 ## Operations
 
@@ -231,7 +300,7 @@ A console has one current account at a time. Every operation is that account's.
 | `friends` | | `{"friends": [...]}` |
 | `config` | | `{"name": "<server>", "stun": ["host:port", ...]}` |
 | `wait` | `after` | `{"epoch": "<id>", "events": [...], "next": n}` |
-| `invite` | `friend`, `sealed` | `{"invite": "<id>", "expires_in": 1800}`, or `unavailable` |
+| `invite` | `invite`, `friend`, `sealed` | `{"invite": "<id>", "expires_in": 1800}`, or `unavailable` |
 | `cancel` | `invite` | |
 | `decline` | `invite` | |
 | `join` | `invite` | `{"session": "<id>"}`, or `unavailable` |
@@ -250,10 +319,17 @@ A console has one current account at a time. Every operation is that account's.
 `offline`, and a friend on a linked server that is behind or out of reach is `offline`.
 The owner's notes never reach a console.
 
+A box in `invite` is at most 2 KiB, and in `signal` at most 16 KiB. A username is at most 128
+bytes, with no control or format characters.
+
 **`wait`** is the one long request, held up to 25 seconds, and it is how a console counts
 as on: a console with no request for 75 seconds shows Offline. `after` is the last `next`
 it was given, and `epoch` changes when the server restarts, which means fetch `friends`
-again and start over at 0.
+again and start over at 0. One answer holds at most 64 KiB of events; `next` says where to
+carry on.
+
+Any operation from a console taken off the server answers `{"error":"removed"}`, except `wait`,
+which still delivers what is queued.
 
 **Events:**
 
@@ -271,7 +347,8 @@ again and start over at 0.
 anyone Offline or Linked up; the 30 minutes; declines; a join ending any other invite to
 that person; whichever of a join and a cancel reached it first. An inviter counts as
 Linked up from the moment of the invite until it ends with nobody joining, or until the
-session ends.
+session ends. The server that receives a knock refuses more than 10 in 10 minutes from one
+person to another.
 
 **`report` reasons,** the only words that reach the log: `none`, `no_path`, `timeout`,
 `relay_limit`, `behind`, `other`.
@@ -284,11 +361,13 @@ the other's key and address, and each sends to the other by its own short reques
 is no long request between servers.
 
 Only people named in a pair are ever mentioned across a link. A server refuses any message
-about anyone else, and nothing is passed on to a third server.
+about anyone else, and nothing is passed on to a third server. A pair comes only from a code:
+`link_hello` updates what is known of a pair and never adds one. Every invite and session named
+in a link operation must be one that link is part of, otherwise `unavailable`.
 
 | `op` | Fields | |
 |---|---|---|
-| `link_hello` | `name`, `address`, `pairs`: `[{"ours", "theirs", "status", "username", "key", "stream"}]` | Sent every 60 seconds and when something changes. It carries the sender's current name and address, which the other side saves, so a changed address reaches a linked server on its own. |
+| `link_hello` | `name`, `address`, `pairs`: `[{"ours", "theirs", "status", "username", "key", "stream"}]` | Sent every 60 seconds and when something changes. A pair it has stopped mentioning for 5 minutes is gone. |
 | `link_pair_remove` | `theirs`, `ours` | A pair was removed on the other side. |
 | `link_unlink` | | The whole link was removed on the other side. |
 | `link_invite` | `invite`, `from`, `to`, `sealed` | Answer: ok or `unavailable`. |
@@ -298,6 +377,20 @@ about anyone else, and nothing is passed on to a third server.
 | `link_end` | `session` | |
 | `link_relay` | `session` | The same answer as `relay`. |
 
+**An address a server is told is only a candidate.** A linked server's address arrives this way:
+when it uses a code, and in `link_hello`. So it could name something on your home network, to make
+your server send requests there. So:
+
+- A told address is a host, a port and an optional path, with `http` or `https` if it has a scheme.
+  Anything holding `?`, `#`, `@`, a space or a control character is refused. Every request's path
+  ends in `/linkup/v1`, and redirects are not followed.
+- A candidate is tried with an Open under the remembered key, at most once per 10 minutes per link,
+  and saved only if that succeeds. Something on a home network cannot finish that handshake, so
+  it is never adopted.
+- Once saved, a told address may not lead to a private address, as the relay's list has them, unless
+  it led to one when it was proved, so a name cannot change to point inside later. An address the
+  owner typed is free, so VPN and home-network links keep working.
+
 ## The relay
 
 A TURN server in the container, off until its owner turns it on, on UDP (3478 and a small
@@ -306,11 +399,15 @@ host's is off.
 
 A `relay` password belongs to one session. A new connection can use it for 10 minutes after
 it is given out. A connection that has already started keeps working until the session
-ends, at most 24 hours. It is refused as soon as the server has seen the session end.
+ends, at most 24 hours. It is refused as soon as the server has seen the session end. A session
+can have 4 connections at once. The username holds a tag for the session, not its id.
 
 It refuses to relay to private addresses: IPv4 and IPv6 loopback, private, link-local,
-unique-local, carrier-grade (100.64.0.0/10), multicast and unspecified addresses, and
-IPv4 addresses mapped into IPv6.
+unique-local, carrier-grade (100.64.0.0/10), multicast and unspecified addresses, IPv4 addresses
+written inside IPv6 ones, and the ranges kept for documentation and tests. It refuses ports under
+1024. It sends to the host's own public address only on the relay's own ports, because two consoles
+can share one relay, and that address would otherwise lead to every port the owner forwards. A
+connection can have 8 peer addresses.
 
 Each connection is capped at 26 Mbit/s, about what the console's stream reaches at its
 short peaks. Bytes are counted through the relay, saved now and then, and when the month's
@@ -321,7 +418,10 @@ encrypted between the two consoles, by WebRTC, so the relay cannot read them.
 
 Usernames, who is friends with whom, the owner's notes, console and server public keys, the
 addresses of consoles connected at that moment, use of the relay's data, and the chance to
-send false connection details or false keys to consoles. It never holds a RomM login, a game,
+send false connection details or false keys to consoles, including to the friends of its people
+on a linked server. A linked owner has this power too, over the people it hosts: they can rename
+them or change their key, and can always have invented them. It never holds a RomM login, a game,
 a save or play history, and it cannot read a box that was sealed before it was broken into.
 The console's LinkUp program is walled off from the home folder that holds the RomM token and
-the PIN.
+the PIN. A stolen server key stays good until replaced, so a server that was broken into starts
+over with a new data folder, and everyone pairs again.

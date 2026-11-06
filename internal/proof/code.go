@@ -27,7 +27,8 @@ const (
 	hashLength = 32
 )
 
-var hashSalt = []byte("cabinet-linkup code 1")
+// hashSalt is exactly 16 bytes, so libsodium can compute K as well as OpenSSL.
+var hashSalt = []byte("cabinet-linkup 1")
 
 // NewCode draws a code, grouped for reading: K7MR-4QXT-9HPV.
 func NewCode() string {

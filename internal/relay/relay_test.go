@@ -21,7 +21,7 @@ func TestBlockedAddresses(t *testing.T) {
 		"100.64.0.1", "100.127.255.255", "0.0.0.0", "224.0.0.1", "255.255.255.255", "198.18.0.1", "203.0.113.5",
 		"::1", "::", "fe80::1", "fc00::1", "fd12:3456::1", "ff02::1", "2001:db8::1",
 		"::ffff:10.0.0.1", "::ffff:127.0.0.1", "::ffff:192.168.0.1", "::ffff:100.64.0.1",
-		"64:ff9b::a00:1", "2002:a00:1::", "2001:0:a00:1::", "fec0::1",
+		"64:ff9b::a00:1", "2002:a00:1::", "2001:0:a00:1::", "fec0::1", "::a00:1",
 	}
 	for _, a := range blocked {
 		if !Blocked(net.ParseIP(a)) {
@@ -198,6 +198,54 @@ func TestPrivatePeerRefused(t *testing.T) {
 	}
 }
 
+func TestLowPortsAndTheOwnersOwnAddress(t *testing.T) {
+	r := newRig(t, true, 500)
+	r.s.setAddress(net.IPv4(203, 0, 113, 24))
+	own := net.IPv4(203, 0, 113, 24)
+	for _, c := range []struct {
+		ip   net.IP
+		port int
+		ok   bool
+	}{
+		{net.IPv4(8, 8, 8, 8), 53, false},
+		{net.IPv4(8, 8, 8, 8), 123, false},
+		{net.IPv4(8, 8, 8, 8), 1023, false},
+		{net.IPv4(8, 8, 8, 8), 1024, true},
+		{net.IPv4(8, 8, 8, 8), 50000, true},
+		{own, 8080, false},
+		{own, r.s.cfg.Port, true},
+		{own, r.s.cfg.PortMin, true},
+	} {
+		if got := r.s.sendable(&net.UDPAddr{IP: c.ip, Port: c.port}); got != c.ok {
+			t.Errorf("%v:%d = %v", c.ip, c.port, got)
+		}
+	}
+}
+
+func TestPeersPerConnection(t *testing.T) {
+	r := newRig(t, true, 500)
+	client := &net.UDPAddr{IP: net.IPv4(8, 8, 4, 4), Port: 5000}
+	for i := range peersPerConnection {
+		if !r.s.permit(client, net.IPv4(1, 1, 1, byte(i))) {
+			t.Fatalf("peer %d refused", i)
+		}
+	}
+	if r.s.permit(client, net.IPv4(1, 1, 2, 1)) {
+		t.Error("too many peers")
+	}
+	if !r.s.permit(client, net.IPv4(1, 1, 1, 0)) {
+		t.Error("one it already has is still fine")
+	}
+}
+
+func TestUsernameDoesNotCarryTheSession(t *testing.T) {
+	r := newRig(t, true, 500)
+	creds, _ := r.s.Credentials("deadbeefdeadbeef")
+	if strings.Contains(creds.Username, "deadbeef") {
+		t.Error(creds.Username)
+	}
+}
+
 func TestWrongPasswordAndMadeUpNames(t *testing.T) {
 	r := newRig(t, true, 500)
 	creds, _ := r.s.Credentials("game1")
@@ -261,6 +309,7 @@ func TestEndedSessionStops(t *testing.T) {
 
 func TestCountsAndLimit(t *testing.T) {
 	r := newRig(t, true, 1)
+	r.s.setAddress(net.IPv4(127, 0, 0, 9))
 	creds, _ := r.s.Credentials("game1")
 	alloc, err := r.client(t, creds).Allocate()
 	if err != nil {
