@@ -3,6 +3,7 @@ package proof
 import (
 	"crypto/rand"
 	"math/big"
+	"runtime/debug"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -63,5 +64,8 @@ func TidyCode(typed string) (string, bool) {
 // worked out ahead of time, when the code is made, so a guess costs the guesser the hash and
 // the server almost nothing.
 func SlowHash(tidy string) []byte {
-	return argon2.IDKey([]byte(tidy), hashSalt, hashTime, hashMemory, hashLanes, hashLength)
+	k := argon2.IDKey([]byte(tidy), hashSalt, hashTime, hashMemory, hashLanes, hashLength)
+	// Give the 64 MiB back: a small device should not keep it for one code.
+	debug.FreeOSMemory()
+	return k
 }

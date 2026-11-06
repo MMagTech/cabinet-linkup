@@ -321,7 +321,7 @@ func newCode(c store.Code) store.Code {
 	tidy, _ := proof.TidyCode(c.Code)
 	hashing.Lock()
 	c.K = proof.SlowHash(tidy)
-	finishHash()
+	hashing.Unlock()
 	c.Expires = time.Now().Add(codeLife)
 	return c
 }
