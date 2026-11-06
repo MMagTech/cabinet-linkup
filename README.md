@@ -42,6 +42,10 @@ because it counts 100.64.0.0/10 as not public.
 **On Unraid:** add [unraid/cabinet-linkup.xml](unraid/cabinet-linkup.xml) as a template on the Docker
 page, and fill in the fields.
 
+**Rootless Podman:** use `--network=host` and set the ports with the variables below. A rootless
+container's own network hides visitors' addresses, which the relay needs, and hides other containers on
+the same machine.
+
 Then open the admin page, `http://your-server:7846`. **Whoever opens it first sets the password,**
 so do that as soon as it is running.
 

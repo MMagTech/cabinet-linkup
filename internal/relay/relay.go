@@ -228,6 +228,9 @@ func (s *Service) startLocked() error {
 	s.cancel = cancel
 	go s.keepUp(ctx)
 	s.log.RelayOn()
+	if s.cfg.AllowPrivate {
+		s.log.RelayPrivateAllowed()
+	}
 	return nil
 }
 

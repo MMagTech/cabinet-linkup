@@ -148,6 +148,10 @@ func (l *Log) LinkDown(number int) { l.write(link(number) + " down") }
 // RelayOn records the relay turning on.
 func (l *Log) RelayOn() { l.write("relay on") }
 
+// RelayPrivateAllowed records that this relay may reach private addresses, which only a test
+// server started that way can.
+func (l *Log) RelayPrivateAllowed() { l.write("relay may reach private addresses: a test server") }
+
 // RelayOff records the relay turning off.
 func (l *Log) RelayOff() { l.write("relay off") }
 

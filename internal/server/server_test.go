@@ -1079,3 +1079,96 @@ func TestLogsHoldNothingPrivate(t *testing.T) {
 }
 
 type box2 struct{ b *box }
+
+// A game that goes through the relay: a real TURN allocation with a session's password, bytes counted
+// for the month, and the game counted once the consoles say it was relayed.
+func TestARelayedGame(t *testing.T) {
+	b := startServer(t, "Ours")
+	b.form("/relay/on")
+	alex := player(t, b.address, b.ownCode(), "alex")
+	sam := player(t, b.address, b.invite("alex"), "sam")
+	if relay := b.get("/relay"); !strings.Contains(relay, "Used this month") {
+		t.Fatal(relay)
+	}
+	id := standin.NewInviteID()
+	friend := friendsOf(t, alex)["sam"]
+	if _, err := alex.Invite(id, friend.ID, "sealed"); err != nil {
+		t.Fatal(err)
+	}
+	if creds, _, err := alex.Relay(id); err == nil && creds != nil {
+		t.Error("no relay before a join")
+	}
+	if _, err := sam.Join(id); err != nil {
+		t.Fatal(err)
+	}
+	creds, why, err := alex.Relay(id)
+	if err != nil || creds == nil {
+		t.Fatalf("%q %v", why, err)
+	}
+	if !strings.HasPrefix(creds.URLs[0], "turn:127.0.0.1:") {
+		t.Errorf("%+v", creds)
+	}
+	if err := alex.Report(id, "relay", "none"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.get("/relay"), "1 game") {
+		t.Error("relayed games this month")
+	}
+	if st := b.s.Store.Snapshot(); st.Games.Relayed != 1 {
+		t.Errorf("%+v", st.Games)
+	}
+	if strings.Contains(b.get("/status"), ">0<") && !strings.Contains(b.get("/status"), "0% direct") {
+		t.Error("the Status line should count it")
+	}
+	if err := sam.End(id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRelayOffOrFullIsSaid(t *testing.T) {
+	b := startServer(t, "Ours")
+	alex := player(t, b.address, b.ownCode(), "alex")
+	sam := player(t, b.address, b.invite("alex"), "sam")
+	id := standin.NewInviteID()
+	alex.Invite(id, friendsOf(t, alex)["sam"].ID, "sealed")
+	sam.Join(id)
+	creds, why, err := alex.Relay(id)
+	if err != nil || creds != nil || why != "off" {
+		t.Errorf("%v %q %v", creds, why, err)
+	}
+}
+
+// The host's server's relay first, then the friend's: across a link, the friend's console gets the
+// same relay as the host's.
+func TestRelayChoiceAcrossALink(t *testing.T) {
+	a, c, maya, june := twoLinked(t)
+	id := standin.NewInviteID()
+	maya.Invite(id, friendsOf(t, maya)["june"].ID, "sealed")
+	nextEvent(t, june, "invite")
+	if _, err := june.Join(id); err != nil {
+		t.Fatal(err)
+	}
+	if creds, why, _ := june.Relay(id); creds != nil || why == "" {
+		t.Errorf("both off: %v %q", creds, why)
+	}
+	c.form("/relay/on")
+	eventually(t, "the friend's relay is used when the host's is off", func() bool {
+		creds, _, _ := june.Relay(id)
+		return creds != nil
+	})
+	viaFriend, _, _ := maya.Relay(id)
+	a.form("/relay/on")
+	eventually(t, "the host's relay comes first", func() bool {
+		creds, _, _ := june.Relay(id)
+		return creds != nil && creds.URLs[0] != ""
+	})
+	hostPort := func(creds *standin.RelayCreds) string { return creds.URLs[0] }
+	first, _, _ := june.Relay(id)
+	second, _, _ := maya.Relay(id)
+	if first == nil || second == nil || hostPort(first) != hostPort(second) {
+		t.Errorf("both consoles should get the host's relay: %+v %+v", first, second)
+	}
+	if viaFriend != nil && hostPort(viaFriend) == hostPort(second) {
+		t.Error("it should have moved to the host's")
+	}
+}

@@ -11,8 +11,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/pion/turn/v4"
 
 	"github.com/MMagTech/cabinet-linkup/internal/proof"
 	"github.com/MMagTech/cabinet-linkup/internal/standin"
@@ -190,8 +195,73 @@ func run(args []string) error {
 		return print(map[string]any{"relay": creds, "reason": why})
 	case "leave":
 		return c.Leave()
+	case "relaycheck":
+		if err := need(2); err != nil {
+			return err
+		}
+		return relayCheck(c, rest[0], rest[1])
 	}
 	return fmt.Errorf("no action %q", action)
+}
+
+// relayCheck sends real packets through a session's relay, to a peer that echoes them.
+func relayCheck(c *standin.Console, session, peerAddress string) error {
+	creds, why, err := c.Relay(session)
+	if err != nil {
+		return err
+	}
+	if creds == nil {
+		return errors.New("no relay: " + why)
+	}
+	host := strings.TrimPrefix(strings.SplitN(creds.URLs[0], "?", 2)[0], "turn:")
+	conn, err := net.ListenPacket("udp4", ":0")
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	client, err := turn.NewClient(&turn.ClientConfig{
+		STUNServerAddr: host, TURNServerAddr: host, Username: creds.Username, Password: creds.Password,
+		Realm: "linkup", Conn: conn, RTO: 200 * time.Millisecond,
+	})
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	if err := client.Listen(); err != nil {
+		return err
+	}
+	allocation, err := client.Allocate()
+	if err != nil {
+		return fmt.Errorf("allocating: %w", err)
+	}
+	defer allocation.Close()
+	peer, err := net.ResolveUDPAddr("udp4", peerAddress)
+	if err != nil {
+		return err
+	}
+	allocation.SetReadDeadline(time.Now().Add(5 * time.Second))
+	payload := make([]byte, 1200)
+	var sent, echoed atomic.Int32
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		buffer := make([]byte, 2048)
+		for range 50 {
+			if _, err := allocation.WriteTo(payload, peer); err != nil {
+				return
+			}
+			sent.Add(1)
+			if n, _, err := allocation.ReadFrom(buffer); err == nil && n == len(payload) {
+				echoed.Add(1)
+			}
+		}
+	}()
+	// A relay that has stopped answering, at its limit say, leaves a write waiting for good.
+	select {
+	case <-finished:
+	case <-time.After(20 * time.Second):
+	}
+	return print(map[string]any{"relayed_at": allocation.LocalAddr().String(), "sent": sent.Load(), "echoed": echoed.Load()})
 }
 
 func main() {

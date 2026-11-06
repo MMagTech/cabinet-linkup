@@ -503,7 +503,21 @@ func (h *Handler) open(w http.ResponseWriter, msg []byte) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	// A recorded Open is dropped here, before anything is kept for it.
+	st := h.store.Snapshot()
+	theirs := proof.Hello{Protocol: proof.Protocol, Oldest: proof.Oldest}
+	s := &session{key: string(key), last: h.now()}
+	removed := false
+	if c := st.ConsoleByKey(key); c != nil {
+		removed = c.Removed
+		s.kind, s.console = peerConsole, c.Number
+	} else if l := st.LinkByKey(key); l != nil {
+		s.kind, s.link = peerServer, l.ID
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	// A recorded Open is dropped here, before anything is kept for it. Only a known key gets this
+	// far, so a stranger cannot fill the table with made-up keys.
 	h.mu.Lock()
 	replayed := said.T <= h.highestT[string(key)]
 	if !replayed {
@@ -514,26 +528,15 @@ func (h *Handler) open(w http.ResponseWriter, msg []byte) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	st := h.store.Snapshot()
-	theirs := proof.Hello{Protocol: proof.Protocol, Oldest: proof.Oldest}
-	s := &session{key: string(key), last: h.now()}
-	if c := st.ConsoleByKey(key); c != nil {
-		if c.Removed {
-			theirs.Removed = true
-			plain, _ := json.Marshal(theirs)
-			answer, _, err := accepting.Answer(plain)
-			if err != nil {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-			writeBytes(w, answer)
+	if removed {
+		theirs.Removed = true
+		plain, _ := json.Marshal(theirs)
+		answer, _, err := accepting.Answer(plain)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		s.kind, s.console = peerConsole, c.Number
-	} else if l := st.LinkByKey(key); l != nil {
-		s.kind, s.link = peerServer, l.ID
-	} else {
-		w.WriteHeader(http.StatusNotFound)
+		writeBytes(w, answer)
 		return
 	}
 

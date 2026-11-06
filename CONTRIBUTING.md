@@ -39,6 +39,10 @@ docker build -t cabinet-linkup:dev .
 
 CI runs all of this on every pull request, with `govulncheck` and a build for amd64 and arm64.
 
+Consoles on one home network can only reach a relay that may send to private addresses, which a real
+server refuses. `LINKUP_TEST_RELAY_PRIVATE=1` allows it, and the log says so. It is for test servers only
+and stays out of the setup guide.
+
 ## The rules
 
 CabinetOS's own rules apply here: search before you write, remove what you replace, no commented-out
