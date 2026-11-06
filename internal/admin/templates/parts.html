@@ -1,0 +1,53 @@
+{{/* What more than one screen draws. */}}
+
+{{/* A time as the server knows it, in UTC. admin.js rewrites it in the owner's
+     own time zone, with the zone named; a container's clock is usually UTC. */}}
+{{define "when-date"}}<time datetime="{{.}}" data-date>{{.}}</time>{{end}}
+{{define "when-short"}}<time datetime="{{.}}" data-short>{{.}}</time>{{end}}
+{{define "when-day"}}<time datetime="{{.}}" data-day>{{.}}</time>{{end}}
+
+{{define "pill"}}{{if .}}<div class="pill" role="status"><span class="dot {{.Tone}}"></span>{{.Text}}</div>{{end}}{{end}}
+
+{{/* What is wrong with a field, on its label's line. No new line, so nothing moves. */}}
+{{define "field-error"}}{{if .}}<span class="field-error" role="alert">{{.}}</span>{{end}}{{end}}
+
+{{/* The letter disc the console draws for a person with no picture. */}}
+{{define "avatar"}}<span class="avatar t{{.Tint}}" aria-hidden="true">{{.Letter}}</span>{{end}}
+
+{{define "status"}}{{if .Online}}<span class="status on"><span class="dot"></span>Online</span>{{else}}<span class="status">{{template "when-day" .LastSeen}}</span>{{end}}{{end}}
+
+{{/* A code made and not yet typed: a person's, or a link's. Their note is all
+     there is of them until they type it; then their login takes over. */}}
+{{define "waiting"}}<div class="item"><div class="item-text"><div class="item-name">{{if .Note}}{{.Note}}{{else}}Invite{{end}}</div><div class="item-sub">Expires {{template "when-day" .Expires}}</div></div><a class="btn small" href="{{.MessageURL}}">Show</a></div>{{end}}
+
+{{/* Opens over the page: a sheet from the foot on a phone, a dialog on a computer. */}}
+{{define "sheet-top"}}<div class="sheet-wrap"><a class="sheet-backdrop" href="{{.Back}}" aria-label="Close"></a><div class="sheet" role="dialog" aria-modal="true"><a class="sheet-close" href="{{.Back}}" aria-label="Close">{{template "icon-close"}}</a>{{end}}
+{{define "sheet-end"}}</div></div>{{end}}
+
+{{/* A code ready to send, for a person, a reinstall or a link. */}}
+{{define "ready"}}{{template "sheet-top" .}}
+  <h2 class="sheet-title">{{.Title}}</h2>
+  {{if .Who}}<p class="sub">{{.Who}}</p>{{end}}
+  <div class="message" data-message>
+    <pre class="message-text">{{.Intro}}
+
+{{.Steps}}
+
+<span class="message-key">Address: {{.Address}}</span>
+<span class="message-key message-code">Code: {{.Code}}</span>
+
+Expires {{template "when-date" .Expires}}</pre>
+    <button type="button" class="btn primary wide" data-copy>{{template "icon-copy"}}Copy</button>
+    <p class="status-line" role="status" data-copied></p>
+  </div>
+  {{if .CancelURL}}<form method="post" action="{{.CancelURL}}"><input type="hidden" name="code" value="{{.ID}}"><button class="text-button danger">{{.CancelWord}}</button></form>{{end}}
+{{template "sheet-end"}}{{end}}
+
+{{/* A question before something hard to undo. */}}
+{{define "confirm"}}{{template "sheet-top" .}}
+  <h2 class="sheet-title">{{.Question}}</h2>
+  <div class="sheet-actions">
+    <a class="btn" href="{{.Back}}">Cancel</a>
+    <form method="post" action="{{.Action}}"><input type="hidden" name="id" value="{{.ID}}"><button class="btn danger-fill">{{.Yes}}</button></form>
+  </div>
+{{template "sheet-end"}}{{end}}

@@ -1,0 +1,19 @@
+/* Graphite: near black with no colour. Goes on top of admin.css. */
+:root {
+  --ground: #0f1012; --bg: #0f1012; --card: #191a1d; --sheet: #1c1d21; --pill: #26272b; --line: rgba(255, 255, 255, .08);
+  --ink: #ececee; --dim: rgba(236, 236, 238, .64); --faint: rgba(236, 236, 238, .42);
+  --accent: #8fc1ff; --amber: #e8b45c; --bad: #ff8a80; --main: #ececee; --on-main: #111;
+  --btn: rgba(255, 255, 255, .08); --btn-on: rgba(255, 255, 255, .13); --hover: rgba(255, 255, 255, .04);
+  --well: #111214; --current: rgba(255, 255, 255, .05); --tab-bg: rgba(15, 16, 18, .92); --side-bg: #0c0d0f;
+}
+.btn { border-radius: 8px; }
+.card, .auth-card { border-radius: 10px; }
+input, select { border-radius: 8px; }
+.t1, .t2, .t3, .t4, .t5 { background: #2a2b30; color: #c9c9ce; }
+.status.on { color: #7fd99a; }
+.status.on .dot, .dot-on { background: #7fd99a; }
+.switch.on { background: #ececee; }
+.switch.on span { background: #111; }
+h1 { font-weight: 700; }
+.meter-a { background: var(--accent); }
+.row-icon { background: var(--btn); color: var(--ink); }

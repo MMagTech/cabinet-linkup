@@ -1,0 +1,36 @@
+{{/* The page around every screen, written out by render.go on each side of the
+     screen's own template, and the navigation: a tab bar at the foot on a phone,
+     a side bar on a computer. One piece of markup; admin.css lays it out. */}}
+
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="{{.ThemeColor}}">
+<title>LinkUp</title>
+<link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+<link rel="preload" href="/static/NotoSans-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/fonts.css?v={{.V}}">
+<link rel="stylesheet" href="/static/admin.css?v={{.V}}">
+{{if .Theme}}<link rel="stylesheet" href="/static/theme-{{.Theme}}.css?v={{.V}}">{{end}}
+</head>
+<body>
+{{template "mark-defs"}}
+{{end}}
+
+{{define "foot"}}{{template "pill" .Notice}}<script src="/static/admin.js?v={{.V}}"></script>
+</body>
+</html>
+{{end}}
+
+{{define "nav"}}<aside class="nav">
+  <a class="nav-brand" href="/status">{{template "mark"}}<span>LinkUp</span></a>
+  <nav class="nav-items" aria-label="Sections">
+    <a href="/status"{{if .OnStatus}} aria-current="page"{{end}}>{{template "icon-status"}}<span>Status</span></a>
+    <a href="/people"{{if .OnPeople}} aria-current="page"{{end}}>{{template "icon-people"}}<span>People</span></a>
+    <a href="/relay"{{if .OnRelay}} aria-current="page"{{end}}>{{template "icon-relay"}}<span>Relay</span></a>
+    <a href="/server"{{if .OnServer}} aria-current="page"{{else}}{{if .OnLinks}} aria-current="page"{{end}}{{end}}>{{template "icon-server"}}<span>Server</span></a>
+  </nav>
+</aside>
+{{end}}

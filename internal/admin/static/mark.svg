@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="160 146 280 338" role="img" aria-label="CabinetOS">
+  <defs>
+    <linearGradient id="marquee" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f68cb8"/>
+      <stop offset="1" stop-color="#fbc27a"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd36a"/>
+      <stop offset="0.55" stop-color="#f99a4c"/>
+      <stop offset="1" stop-color="#ef5f38"/>
+    </linearGradient>
+  </defs>
+  <rect x="175" y="150" width="250" height="330" rx="20" fill="#f4efe0"/>
+  <rect x="193" y="168" width="214" height="34" fill="url(#marquee)"/>
+  <rect x="193" y="213" width="214" height="159" fill="url(#screen)"/>
+  <rect x="165" y="390" width="270" height="48" rx="10" fill="#dad4c3"/>
+  <circle cx="221" cy="414" r="11" fill="#3d3548"/>
+  <circle cx="293" cy="414" r="11" fill="#e8395a"/>
+  <circle cx="331" cy="414" r="11" fill="#f5b82e"/>
+  <rect x="371" y="405" width="31" height="18" rx="5" fill="#fbe7cc"/>
+</svg>

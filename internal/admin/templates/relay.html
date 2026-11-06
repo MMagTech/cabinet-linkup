@@ -1,0 +1,28 @@
+{{/* Relay: the switch, the month's data and relayed games, the limit, the address it
+     found and Test. Off shows only the switch. A reached limit or a failed test goes
+     on the line beside it, so nothing moves. */}}
+
+{{define "relay"}}<div class="page">
+  <header class="page-head">{{template "mark"}}<h1>Relay</h1></header>
+  <div class="card">
+    <form method="post" action="{{if .On}}/relay/off{{else}}/relay/on{{end}}" class="item"><span class="row-icon">{{template "icon-relay"}}</span><div class="item-text"><div class="item-name">{{if .On}}On{{else}}Off{{end}}</div></div><button class="switch{{if .On}} on{{end}}" role="switch" aria-checked="{{if .On}}true{{else}}false{{end}}" aria-label="Relay"><span></span></button></form>
+  </div>
+  {{if .On}}<div class="cards">
+    <section class="card pad">
+      <h2 class="label">Used this month</h2>
+      <div class="big">{{.UsedGB}} <small>of {{.LimitGB}} GB</small></div>
+      <div class="meter" role="img" aria-label="{{.UsedGB}} of {{.LimitGB}} GB used"><i class="meter-a{{if .Warn}} warn{{end}}" style="width:{{.UsedPercent}}%"></i></div>
+      {{if .AtLimit}}<p class="sub line-bad">Limit reached, resets {{.Resets}}</p>{{else}}<p class="sub">{{if .GamesMonth}}{{.GamesMonthText}}, resets{{else}}Resets{{end}} {{.Resets}}</p>{{end}}
+    </section>
+    <section class="card pad">
+      <form method="post" action="/relay/limit" class="form">
+        <label>Monthly limit<span class="inline"><input type="number" name="gb" value="{{.LimitGB}}" min="1" inputmode="numeric"><span class="unit">GB</span></span></label>
+        <label>Resets on day<input type="number" name="day" value="{{.ResetDay}}" min="1" max="31" inputmode="numeric"></label>
+        <button class="btn small save">Save</button>
+      </form>
+    </section>
+    <section class="card">
+      <form method="post" action="/relay/test" class="item"><span class="row-icon">{{template "icon-server"}}</span><div class="item-text"><div class="item-name">Address</div>{{if .TestFailed}}<div class="item-sub line-bad">Test failed</div>{{else}}<div class="item-sub address">{{.Found}}</div>{{end}}</div><button class="btn small">Test</button></form>
+    </section>
+  </div>{{end}}
+</div>{{end}}

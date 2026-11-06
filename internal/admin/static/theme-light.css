@@ -1,0 +1,25 @@
+/* Light: white cards, blue-grey, one clear blue. Goes on top of admin.css. */
+:root {
+  color-scheme: light;
+  --ground: #f3f5f8; --bg: #f3f5f8; --card: #fff; --sheet: #fff; --pill: #fff; --line: #e3e7ed;
+  --ink: #101828; --dim: #475467; --faint: #667085;
+  --accent: #1d5fd8; --amber: #a15c00; --bad: #d11a2a; --main: #1d5fd8; --on-main: #fff;
+  --btn: #edf0f5; --btn-on: #e2e7ee; --hover: #f5f7fa;
+  --well: #f8f9fb; --current: #e9f0fd; --tab-bg: rgba(255, 255, 255, .94); --side-bg: #fff;
+}
+.card, .auth-card { border-radius: 12px; box-shadow: 0 1px 2px rgba(16, 24, 40, .05); }
+.mark { filter: drop-shadow(0 1px 1px rgba(16, 24, 40, .3)); }
+.meter-a { background: #1d5fd8; }
+.row-icon { background: #e9f0fd; color: #1d5fd8; }
+.status.on { color: #067647; }
+.status.on .dot, .dot-on { background: #12b76a; }
+.switch.on { background: #1d5fd8; }
+.t1 { background: #fde2ef; color: #a51d63; }
+.t2 { background: #feefc7; color: #8a5a00; }
+.t3 { background: #d5f0f8; color: #0b6f7d; }
+.t4 { background: #e7e0fd; color: #5a3bc4; }
+.t5 { background: #d4f5e1; color: #16713f; }
+@media (min-width: 760px) {
+  .nav-items a[aria-current="page"] { background: #e9f0fd; color: #1d5fd8; }
+  .nav-items a[aria-current="page"] .icon { color: #1d5fd8; }
+}
