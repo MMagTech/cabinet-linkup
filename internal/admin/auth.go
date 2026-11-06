@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,12 @@ const (
 // device's memory.
 var hashing sync.Mutex
 
+// finishHash gives a slow hash's memory back, so a small device does not keep 64 MiB for one sign-in.
+func finishHash() {
+	debug.FreeOSMemory()
+	hashing.Unlock()
+}
+
 // hashPassword stores a password as Argon2id in its usual text form.
 func hashPassword(password string) string {
 	salt := make([]byte, 16)
@@ -44,7 +51,7 @@ func hashPassword(password string) string {
 		panic(err)
 	}
 	hashing.Lock()
-	defer hashing.Unlock()
+	defer finishHash()
 	key := argon2.IDKey([]byte(password), salt, passwordTime, passwordMemory, passwordLanes, passwordLength)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version, passwordMemory, passwordTime, passwordLanes,
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key))
@@ -71,7 +78,7 @@ func checkPassword(stored, password string) bool {
 		return false
 	}
 	hashing.Lock()
-	defer hashing.Unlock()
+	defer finishHash()
 	got := argon2.IDKey([]byte(password), salt, t, m, p, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
