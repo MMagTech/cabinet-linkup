@@ -4,6 +4,8 @@
 # on a network of their own and removes everything when it ends.
 #
 #   ci/run-containers.sh <image> [docker|podman]
+#
+# STANDIN names a stand-in console already built, for a machine with no Go on it.
 set -eu
 
 image=$1
@@ -22,7 +24,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-CGO_ENABLED=0 go build -o "$standin" ./cmd/standin
+if [ -n "${STANDIN:-}" ]; then
+    standin=$STANDIN
+else
+    CGO_ENABLED=0 go build -o "$standin" ./cmd/standin
+fi
 
 $engine network create "$net" >/dev/null
 for name in a b; do
@@ -32,7 +38,7 @@ for name in a b; do
         "$image" >/dev/null
 done
 
-port() { $engine port linkup-$1-$$ "$2/tcp" | head -1 | sed 's/.*://'; }
+port() { $engine port "linkup-$1-$$" "$2/tcp" | head -1 | sed 's/.*://'; }
 console_a=127.0.0.1:$(port a 7845)
 console_b=127.0.0.1:$(port b 7845)
 admin_a=http://127.0.0.1:$(port a 7846)

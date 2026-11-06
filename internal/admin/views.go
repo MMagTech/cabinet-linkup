@@ -243,6 +243,9 @@ func (a *App) linksView(selected string) linksView {
 
 // gb reads as a whole number once it is big enough for a decimal to mean nothing.
 func gb(bytes uint64) string {
+	if bytes < 50_000_000 {
+		return "0"
+	}
 	if bytes >= 10_000_000_000 {
 		return strconv.FormatUint(bytes/1_000_000_000, 10)
 	}

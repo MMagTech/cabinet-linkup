@@ -300,6 +300,7 @@ func (m *Manager) tryCandidate(ctx context.Context, l store.Link) store.Link {
 			current.ProvedPrivate = dialed != nil && relay.Blocked(dialed)
 		}
 		out = *current
+		out.Pairs = slices.Clone(current.Pairs)
 		return nil
 	})
 	return out
