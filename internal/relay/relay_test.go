@@ -238,6 +238,22 @@ func TestPeersPerConnection(t *testing.T) {
 	}
 }
 
+// A session cannot get more connections by asking for more passwords.
+func TestConnectionsCountPerSessionNotPerPassword(t *testing.T) {
+	r := newRig(t, true, 500)
+	r.s.cfg.PortMax = r.s.cfg.PortMin + 20
+	for i := 0; i <= connectionsPerSession+1; i++ {
+		creds, _ := r.s.Credentials("game1")
+		name := creds.Username
+		r.s.mu.Lock()
+		r.s.allocs[tagOf(name)] = i
+		r.s.mu.Unlock()
+		if got := r.s.quota(name, realm, nil); got != (i < connectionsPerSession) {
+			t.Errorf("%d connections: %v", i, got)
+		}
+	}
+}
+
 func TestUsernameDoesNotCarryTheSession(t *testing.T) {
 	r := newRig(t, true, 500)
 	creds, _ := r.s.Credentials("deadbeefdeadbeef")

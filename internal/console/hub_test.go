@@ -598,7 +598,7 @@ func TestRemovingAConsole(t *testing.T) {
 	id, _ := r.h.Invite(1, newInviteID(), b, "s")
 	r.events(1)
 	r.events(2)
-	r.h.ConsoleRemoved(1)
+	r.h.ConsoleRemoved(1, []string{a})
 	if !hasEvent(r.events(1), "removed", "") {
 		t.Error("the console hears")
 	}
@@ -610,20 +610,28 @@ func TestRemovingAConsole(t *testing.T) {
 	}
 }
 
-func TestRemovingAConsoleMidGameEndsItOnTheServer(t *testing.T) {
+// The game does not go through the server, so it carries on with no word to anyone. Its relay stops,
+// and every account on that console is finished, not only the one signed in.
+func TestRemovingAConsoleMidGame(t *testing.T) {
 	r := newHubRig(t)
 	a := r.console(1, "a")
 	b := r.console(2, "b")
+	other, _ := r.h.Signin(2, "other", "other", StatusOnline)
+	r.friends(a, other)
+	r.h.Signin(2, "b", "b", StatusOnline)
 	r.friends(a, b)
 	id, _ := r.h.Invite(1, newInviteID(), b, "s")
 	r.h.Join(2, id)
-	r.events(2)
-	r.h.ConsoleRemoved(2)
-	if !hasEvent(r.events(1), "session_ended", "") {
-		t.Error("the other console hears")
+	r.events(1)
+	r.h.ConsoleRemoved(2, []string{b, other})
+	if hasEvent(r.events(1), "session_ended", "") {
+		t.Error("the game carries on: nothing says it ended")
 	}
 	if len(r.relay.ended) == 0 {
-		t.Error("its relay password stops")
+		t.Error("its relay stops")
+	}
+	if len(r.h.invites) != 0 {
+		t.Error("nothing is left open")
 	}
 }
 
@@ -708,15 +716,16 @@ func TestEpochAndCursorAfterARestart(t *testing.T) {
 // ---- Across a link ----
 
 type fakeLinker struct {
-	mu      sync.Mutex
-	invited []string
-	ended   []string
-	joined  []string
-	signals []string
-	finish  []string
-	joinErr error
-	creds   *relay.Credentials
-	why     string
+	mu        sync.Mutex
+	invited   []string
+	ended     []string
+	joined    []string
+	signals   []string
+	finish    []string
+	joinErr   error
+	inviteErr error
+	creds     *relay.Credentials
+	why       string
 }
 
 func (f *fakeLinker) Changed() {}
@@ -724,7 +733,7 @@ func (f *fakeLinker) Invite(link, invite, from, to, sealed string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.invited = append(f.invited, to)
-	return nil
+	return f.inviteErr
 }
 func (f *fakeLinker) InviteEnded(link, invite, reason string) {
 	f.mu.Lock()
@@ -828,9 +837,6 @@ func TestInviteAcrossALink(t *testing.T) {
 	}
 	if !hasEvent(r.events(1), "joined", "") {
 		t.Error("the inviter hears")
-	}
-	if err := r.h.RemoteJoin("l1", id); err == nil {
-		t.Error("one seat")
 	}
 	r.h.RemoteSignal("l1", id, "answer")
 	if e := r.events(1); len(e) != 1 || e[0].Sealed != "answer" {
@@ -1062,5 +1068,209 @@ func TestWaitAnswerIsCapped(t *testing.T) {
 	_, second, _ := r.h.Wait(context.Background(), 2, next)
 	if len(second) == 0 || second[0].Seq != next+1 {
 		t.Errorf("it must carry on where it stopped: %+v", second[:1])
+	}
+}
+
+func TestASessionEndsIfItsConsoleGoesAway(t *testing.T) {
+	r := newHubRig(t)
+	a := r.console(1, "a")
+	b := r.console(2, "b")
+	r.friends(a, b)
+	id, _ := r.h.Invite(1, newInviteID(), b, "s")
+	r.h.Join(2, id)
+	r.advance(sessionSilence - time.Minute)
+	r.h.Seen(1)
+	r.h.Seen(2)
+	r.h.Tick()
+	if r.h.invites[id] == nil {
+		t.Fatal("too soon")
+	}
+	r.advance(sessionSilence + time.Minute)
+	r.h.Seen(1)
+	r.h.Tick()
+	if r.h.invites[id] != nil {
+		t.Error("the session should have ended")
+	}
+	if len(r.relay.ended) == 0 {
+		t.Error("and its relay")
+	}
+	r.h.Seen(2)
+	if statusOf(t, r.h, 1, b) != StatusOnline {
+		t.Error("they can be knocked on again")
+	}
+}
+
+func TestASessionHasALongestTime(t *testing.T) {
+	r := newHubRig(t)
+	a := r.console(1, "a")
+	b := r.console(2, "b")
+	r.friends(a, b)
+	id, _ := r.h.Invite(1, newInviteID(), b, "s")
+	r.h.Join(2, id)
+	for range 30 {
+		r.advance(time.Hour)
+		r.h.Seen(1)
+		r.h.Seen(2)
+		r.h.Tick()
+	}
+	if r.h.invites[id] != nil {
+		t.Error("24 hours is the most")
+	}
+}
+
+func TestAKnockFromALinkEndsHereToo(t *testing.T) {
+	r, _, maya, _ := linkedRig(t)
+	id := newInviteID()
+	if err := r.h.RemoteInvite("l1", id, "june-there", maya, "s"); err != nil {
+		t.Fatal(err)
+	}
+	r.events(1)
+	r.advance(inviteLife + time.Minute)
+	r.h.Seen(1)
+	r.h.Tick()
+	if r.h.invites[id] != nil {
+		t.Error("a linked server that went away must not leave it on the list")
+	}
+	if !hasEvent(r.events(1), "invite_ended", EndTimeout) {
+		t.Error("the friend hears")
+	}
+}
+
+func TestRemovingAFriendEndsWhatTheyHaveOpen(t *testing.T) {
+	r := newHubRig(t)
+	a := r.console(1, "a")
+	b := r.console(2, "b")
+	r.friends(a, b)
+	id, _ := r.h.Invite(1, newInviteID(), b, "s")
+	r.events(2)
+	r.h.EndBetween(a, b)
+	if !hasEvent(r.events(2), "invite_ended", EndUnavailable) {
+		t.Error("the knock goes")
+	}
+	if r.h.invites[id] != nil {
+		t.Error("gone")
+	}
+	id, _ = r.h.Invite(1, newInviteID(), b, "s")
+	r.h.Join(2, id)
+	r.h.EndBetween(b, a)
+	if r.h.invites[id] != nil || len(r.relay.ended) < 2 {
+		t.Error("a session ends on the server, and its relay")
+	}
+}
+
+func TestUnlinkingEndsWhatTheLinkHasOpen(t *testing.T) {
+	r, _, maya, _ := linkedRig(t)
+	id := newInviteID()
+	r.h.RemoteInvite("l1", id, "june-there", maya, "s")
+	r.h.Join(1, id)
+	r.h.EndLink("l1")
+	if r.h.invites[id] != nil || len(r.relay.ended) == 0 {
+		t.Error("it should end, with its relay")
+	}
+}
+
+func TestAJoinRetryAfterALostAnswer(t *testing.T) {
+	r, _, _, _ := linkedRig(t)
+	r.h.RemoteStatus("l1", false, map[string]string{"june-there": StatusOnline})
+	id, err := r.h.Invite(1, newInviteID(), "p:p1", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.h.RemoteJoin("l1", id); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.h.RemoteJoin("l1", id); err != nil {
+		t.Errorf("the same join again is fine: %v", err)
+	}
+}
+
+func TestOneInviteOutAcrossALinkHoweverFast(t *testing.T) {
+	r, _, _, _ := linkedRig(t)
+	r.h.RemoteStatus("l1", false, map[string]string{"june-there": StatusOnline})
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	won := 0
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := r.h.Invite(1, newInviteID(), "p:p1", "s"); err == nil {
+				mu.Lock()
+				won++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if won != 1 {
+		t.Errorf("%d invites accepted", won)
+	}
+}
+
+func TestAnInviteWithAFailedCallIsNotLeftBehind(t *testing.T) {
+	r, f, _, _ := linkedRig(t)
+	f.inviteErr = ErrUnavailable
+	r.h.RemoteStatus("l1", false, map[string]string{"june-there": StatusOnline})
+	if _, err := r.h.Invite(1, newInviteID(), "p:p1", "s"); err == nil {
+		t.Error("it was refused")
+	}
+	if len(r.h.invites) != 0 {
+		t.Error("left behind")
+	}
+}
+
+func TestAReasonFromALinkIsOneOfTheWords(t *testing.T) {
+	r, _, maya, _ := linkedRig(t)
+	id := newInviteID()
+	r.h.RemoteInvite("l1", id, "june-there", maya, "s")
+	r.events(1)
+	r.h.RemoteInviteEnded("l1", id, "click here")
+	if !hasEvent(r.events(1), "invite_ended", EndUnavailable) {
+		t.Error("anything else becomes unavailable")
+	}
+}
+
+func TestListChangedIsSaidOnceUntilHeard(t *testing.T) {
+	r := newHubRig(t)
+	a := r.console(1, "a")
+	b := r.console(2, "b")
+	r.friends(a, b)
+	r.events(1)
+	for range 50 {
+		r.h.SetStatus(2, StatusOffline)
+		r.h.SetStatus(2, StatusOnline)
+	}
+	if got := r.events(1); len(got) > 2 {
+		t.Errorf("%d events for one change of list", len(got))
+	}
+}
+
+func TestASessionHasABudget(t *testing.T) {
+	var s session
+	now := time.Unix(1000, 0)
+	for i := range requestsPerSecond {
+		if !s.withinBudget(now) {
+			t.Fatalf("request %d refused", i)
+		}
+	}
+	if s.withinBudget(now) {
+		t.Error("past the budget")
+	}
+	if !s.withinBudget(now.Add(time.Second)) {
+		t.Error("a new second starts over")
+	}
+}
+
+func TestSigningInAgainDoesNotSave(t *testing.T) {
+	r := newHubRig(t)
+	r.console(1, "a")
+	var before, after store.State
+	r.st.ReadJSON("state.json", &before)
+	before.Games.Direct = 12345
+	r.st.WriteJSON("state.json", &before)
+	r.h.Signin(1, "a", "a", StatusOnline)
+	r.st.ReadJSON("state.json", &after)
+	if after.Games.Direct != 12345 {
+		t.Error("nothing changed, so nothing should be written")
 	}
 }

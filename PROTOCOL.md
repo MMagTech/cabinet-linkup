@@ -17,8 +17,9 @@ plain IP, IPv6 or a VPN address. So the protocol holds to three requirements:
    server, or posing as the server at its address, cannot pose as either side,
    unless they hold the code. A code travels in an ordinary message, so whoever
    holds it can use it first and take that place, or sit in the middle of that one
-   pairing. It works once, and the owner sees the username on the People list and
-   can remove them.
+   pairing. An invite code makes its user the chosen account's friend at once, and a
+   link code pairs at once. It works once, and the owner sees the username on the
+   People list and can remove them.
 
 And two more that follow from those:
 
@@ -62,7 +63,8 @@ Everything is one HTTP request: `POST <base>/linkup/v1`, body and answer
 
 An IPv6 address is in brackets. A path after the host is kept, for a proxy. A
 certificate is not what makes this safe, so a reader need not check one, and a
-self-signed proxy works. TLS only hides the kind of each message from a watcher.
+self-signed proxy works. TLS only hides each message's kind, session id and counter
+from a watcher, and stops them capturing a first message.
 
 A reader never follows a redirect, and takes `http` and `https` only.
 
@@ -80,14 +82,14 @@ The answers that are not 200, all with an empty body:
 | Status | Meaning |
 |---|---|
 | 403 | Pair: no waiting code matches. The console says "Wrong or expired code". |
-| 429 | Pair: no waiting code matches and there have been too many tries, or the server is at its ceiling. The console says "Too many tries". |
+| 429 | Pair: this public source has failed too often, or the server is at its ceiling, or no waiting code matches and too many have failed lately. The console says "Too many tries". |
 | 404 | Everything else, including every other path, method and malformed body, an Open from a key this server does not know, a replayed Open, and an unknown or closed session. |
 
 None of these is authenticated, so none of them can do more than make a console
 say it failed. A stranger can tell this is a LinkUp server from a 403, and little more.
 
-A request is at most 64 KiB and an answer at most 256 KiB. Anything larger is 404 from
-a server, and a reader stops reading.
+A request is at most 64 KiB: anything larger is 404. An answer is at most 256 KiB: a server keeps
+its own answers under that, and a reader stops reading past it.
 
 ## The code
 
@@ -162,12 +164,14 @@ associated data.
 A pairing in progress lives 60 seconds in memory, at most 32 at a time and 4 per code,
 oldest dropped first. At most 200 codes wait at once.
 
-**Rate limit.** A message that fits a code always goes through. Only a failure counts, and
-the limit only ever changes its answer from 403 to 429: a stranger cannot lock a real code
-out. Failures count per source and in total: 5 a minute per public address (per /64 on IPv6),
-and 30 a minute in all. A private source, which is what a reverse proxy looks like, counts
-only in the total. A ceiling of 200 tries a second holds the work down whatever else
-happens. Failures are logged as counts only.
+**Rate limit.** Only a failure counts: 5 a minute per public address (per /64 on IPv6), and 30 a
+minute in all. A public source past its own 5 is refused before anything is tried, and does not count
+toward the ceiling. Past the total, a message that fits a code still goes through and only a failure's
+answer changes from 403 to 429, so a stranger cannot lock a real code out. A private source, which is
+what a reverse proxy looks like, counts only in the total. A ceiling of 40,000 codes tried a second
+holds the work down, about a tenth of a core, so a server with 2 waiting codes needs 20,000 requests a
+second before anyone is refused. Someone sharing a public address with a guesser is refused too, for a
+minute. Failures are logged as counts only.
 
 **Offline guessing.** Whoever captures message 1, or a fake server that receives
 it, can try guesses at leisure, at one Argon2id per guess, over about 2^57.7 codes.
@@ -198,7 +202,9 @@ The reply:
 
     console: {"ok": true, "console": 3}
     server:  {"ok": true, "name": "Alex's", "account": {"id": ..., "username": ..., "key": ..., "stream": ...}}
-    refused: {"ok": false, "error": "wrong_code"}
+    refused: {"ok": false, "error": "wrong_code" or "bad_request"}
+
+A joiner that gets no answer to message 3 sends the same bytes again.
 
 ## Sessions
 
@@ -211,9 +217,10 @@ initiator already holds the responder's remembered key.
     -> e, es, s, ss           Open. Payload: {"protocol":1,"oldest":1,"stream":1,"t":<t>}
     <- e, ee, se              Answer. Payload: {"session":"<16 hex>","protocol":1,"oldest":1}
 
-`t` is the larger of the time in nanoseconds since 1970 and one more than the last `t` this
-side sent, which it keeps on disk. The server keeps the highest `t` per key in memory and
-answers 404 to anything not above it, with no state kept.
+`t` is an integer: the larger of the time in nanoseconds since 1970 and one more than the last `t` this
+side sent. A console keeps its last `t` on disk, so a clock that moves back cannot lock it out; a server
+opening toward a linked server keeps it in memory. The server keeps the highest `t` per known key in
+memory and answers 404 to anything not above it, with no state kept. So one side makes one Open at a time.
 
 - **An unknown key gets 404,** the same as a malformed body. The console port holds
   nothing for a stranger.
@@ -252,9 +259,9 @@ Each nonce is used once under each key because of three rules:
 - **A sender uses up a counter when it seals.** A retry is the same bytes or a new counter.
 - **Sessions are never saved to disk.**
 
-A session closes after 120 seconds with no request. Any answer that is not 200 means:
-open a new session, with a growing wait between tries, up to 60 seconds. A restart of
-the server closes every session.
+A session closes after 120 seconds with no request. A session makes at most 50 requests a second,
+and past that the answer is `{"error":"busy"}`. Any answer that is not 200 means: open a new session, with
+a growing wait between tries, up to 60 seconds. A restart of the server closes every session.
 
 ## Between two consoles: sealed boxes
 
@@ -266,8 +273,8 @@ pattern `Noise_K_25519_ChaChaPoly_SHA256`, with the prologue
     -> e, es, ss              Payload: JSON, below.
 
 The inviter picks the invite's id, 16 random bytes as hex, before it seals anything, and sends
-it in `invite`, so the first box is bound to it too. The server refuses an id it has already
-seen, unless it is the same inviter with the same box, so a retry after a lost answer is safe.
+it in `invite`, so the first box is bound to it too. While an invite with that id lives, the server
+refuses it again, unless it is the same inviter with the same box, so a retry after a lost answer is safe.
 
 The server sees base64 and passes it on. Noise_K has no replay protection, so a box says:
 
@@ -335,7 +342,7 @@ which still delivers what is queued.
 
 | `type` | Fields | |
 |---|---|---|
-| `friends` | | Something on the list changed; fetch it again. It does not say what. There is no event for someone coming online and no way to nudge anyone. |
+| `friends` | | Something on the list changed; fetch it again. It does not say what, and it is said once until heard. There is no event for someone coming online. |
 | `invite` | `invite`, `from`, `sealed` | |
 | `invite_ended` | `invite`, `reason`: `cancelled`, `timeout`, `declined`, `unavailable` | The one event for an invite ending, for either side. |
 | `joined` | `session` | To the inviter. |
@@ -348,7 +355,13 @@ anyone Offline or Linked up; the 30 minutes; declines; a join ending any other i
 that person; whichever of a join and a cancel reached it first. An inviter counts as
 Linked up from the moment of the invite until it ends with nobody joining, or until the
 session ends. The server that receives a knock refuses more than 10 in 10 minutes from one
-person to another.
+person to another, and ends a knock at 30 minutes by its own clock.
+
+**A session that outlives its people.** A session ends on the server when a console in it has been silent
+for 5 minutes, at 24 hours regardless, and when the owner removes the console, the friendship, the pair or
+the link. The server tells nobody: the game does not go through it and carries on, but its relay stops and
+both people can be knocked on again. A console asked about a session the server has ended answers
+`unavailable`, and a console that wants to say it is in a game after that sends `status` `linkedup`.
 
 **`report` reasons,** the only words that reach the log: `none`, `no_path`, `timeout`,
 `relay_limit`, `behind`, `other`.
@@ -362,17 +375,18 @@ is no long request between servers.
 
 Only people named in a pair are ever mentioned across a link. A server refuses any message
 about anyone else, and nothing is passed on to a third server. A pair comes only from a code:
-`link_hello` updates what is known of a pair and never adds one. Every invite and session named
-in a link operation must be one that link is part of, otherwise `unavailable`.
+`link_hello` updates what is known of a pair and never adds one. A link operation naming an invite or
+session that link is not part of does nothing: it answers `unavailable` to a question, `off` to `link_relay`,
+and is ignored otherwise. A `reason` that is not one of the four words reads as `unavailable`.
 
 | `op` | Fields | |
 |---|---|---|
-| `link_hello` | `name`, `address`, `pairs`: `[{"ours", "theirs", "status", "username", "key", "stream"}]` | Sent every 60 seconds and when something changes. A pair it has stopped mentioning for 5 minutes is gone. |
+| `link_hello` | `name`, `address`, `pairs`: `[{"ours", "theirs", "status", "username", "key", "stream"}]` | Sent every 60 seconds and when something changes. A pair it stops mentioning is gone, unless it is under 5 minutes old, since the two servers may not hear of a new one at the same moment. |
 | `link_pair_remove` | `theirs`, `ours` | A pair was removed on the other side. |
 | `link_unlink` | | The whole link was removed on the other side. |
 | `link_invite` | `invite`, `from`, `to`, `sealed` | Answer: ok or `unavailable`. |
 | `link_invite_ended` | `invite`, `reason` | |
-| `link_join` | `invite` | Answer: ok or `unavailable`. The inviter's server decides. |
+| `link_join` | `invite` | Answer: ok or `unavailable`. The inviter's server decides, and the same join again is ok. |
 | `link_signal` | `session`, `sealed` | |
 | `link_end` | `session` | |
 | `link_relay` | `session` | The same answer as `relay`. |
@@ -382,14 +396,15 @@ when it uses a code, and in `link_hello`. So it could name something on your hom
 your server send requests there. So:
 
 - A told address is a host, a port and an optional path, with `http` or `https` if it has a scheme.
-  Anything holding `?`, `#`, `@`, a space or a control character is refused. Every request's path
+  Anything holding `?`, `#`, `@`, `%`, a space or a control character is refused. Every request's path
   ends in `/linkup/v1`, and redirects are not followed.
-- A candidate is tried with an Open under the remembered key, at most once per 10 minutes per link,
-  and saved only if that succeeds. Something on a home network cannot finish that handshake, so
-  it is never adopted.
+- A candidate is tried with an Open under the remembered key, at most once per 10 minutes per link
+  however many are sent, apart from everything else so that nothing shows how it went, and saved only if
+  that succeeds. Something on a home network cannot finish that handshake, so it is never adopted. A
+  second real change of address within 10 minutes waits its turn.
 - Once saved, a told address may not lead to a private address, as the relay's list has them, unless
-  it led to one when it was proved, so a name cannot change to point inside later. An address the
-  owner typed is free, so VPN and home-network links keep working.
+  the connection that proved it was to one, so a name cannot change to point inside later. An address
+  the owner typed is free, so VPN and home-network links keep working.
 
 ## The relay
 
@@ -400,7 +415,8 @@ host's is off.
 A `relay` password belongs to one session. A new connection can use it for 10 minutes after
 it is given out. A connection that has already started keeps working until the session
 ends, at most 24 hours. It is refused as soon as the server has seen the session end. A session
-can have 4 connections at once. The username holds a tag for the session, not its id.
+can have 4 connections at once, however many passwords it asks for. The username holds a tag for the
+session, not its id.
 
 It refuses to relay to private addresses: IPv4 and IPv6 loopback, private, link-local,
 unique-local, carrier-grade (100.64.0.0/10), multicast and unspecified addresses, IPv4 addresses

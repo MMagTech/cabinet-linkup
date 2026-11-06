@@ -31,6 +31,12 @@ const (
 	waitHold = 25 * time.Second
 	// How often a person's last-seen day is written, at most.
 	seenEvery = time.Hour
+	// A session ends on the server when a console here has been silent this long, and at the second
+	// time regardless, so a lost message or a vanished console cannot leave anyone stuck as Linked up.
+	sessionSilence = 5 * time.Minute
+	longestSession = 24 * time.Hour
+	// Sealed boxes past this in one list are left for the event that already carried them.
+	maxFriendsBytes = 192 * 1024
 
 	maxEvents        = 256
 	maxInviteBox     = 2 * 1024
@@ -126,6 +132,8 @@ type live struct {
 	stream   int
 	events   []Event
 	next     int
+	heard    int  // the last event it said it has
+	silent   bool // it has gone quiet, and its friends have heard
 	wake     chan struct{}
 }
 
@@ -140,6 +148,7 @@ type invite struct {
 	sealed   string
 	expires  time.Time
 	joined   bool
+	joinedAt time.Time
 	relayed  bool // this server's relay gave out a password for it
 	reported bool
 }
@@ -209,9 +218,11 @@ func (h *Hub) Tick() {
 	st := h.store.Snapshot()
 	touched := map[string]bool{}
 	for _, l := range h.lives {
-		if l.person != "" && !h.liveLocked(l, now) && l.status != StatusOffline {
+		if l.person != "" && !h.liveLocked(l, now) && !l.silent {
+			// The account's own status stays as it said: a console that comes back after a blip
+			// should not have to know it was gone.
+			l.silent = true
 			touched[l.person] = true
-			l.status = StatusOffline
 			for _, inv := range h.invites {
 				if inv.fromHere && inv.from == l.person && !inv.joined {
 					h.endInviteLocked(inv, EndCancelled, false)
@@ -220,14 +231,49 @@ func (h *Hub) Tick() {
 		}
 	}
 	for _, inv := range h.invites {
-		if !inv.joined && now.After(inv.expires) && inv.fromHere {
-			h.endInviteLocked(inv, EndTimeout, true)
-			touched[inv.from] = true
+		switch {
+		case !inv.joined && now.After(inv.expires):
+			if inv.fromHere {
+				h.endInviteLocked(inv, EndTimeout, true)
+				touched[inv.from] = true
+			} else {
+				// The inviter's server says this too. A linked server that has gone away must not
+				// leave a knock on someone's list, so this server's own clock ends it as well.
+				delete(h.invites, inv.id)
+				h.pushTo(&st, inv.to, Event{Type: "invite_ended", Invite: inv.id, Reason: EndTimeout})
+				h.pushTo(&st, inv.to, Event{Type: "friends"})
+			}
+		case inv.joined && (now.Sub(inv.joinedAt) > longestSession || h.silentLocked(&st, inv, now)):
+			h.quietEndLocked(&st, inv)
 		}
 	}
 	for id := range touched {
 		h.changedLocked(&st, id)
 	}
+}
+
+// silentLocked says whether a session's person on this server has gone quiet. The game may still be
+// running between the consoles, and that does not need the server.
+func (h *Hub) silentLocked(st *store.State, inv *invite, now time.Time) bool {
+	for _, id := range []string{inv.from, inv.to} {
+		p := st.Person(id)
+		if p == nil {
+			continue
+		}
+		l := h.lives[p.Console]
+		if l == nil || (l.waiting == 0 && now.Sub(l.lastSeen) > sessionSilence) {
+			return true
+		}
+	}
+	return false
+}
+
+// quietEndLocked ends a session on the server with no word to the consoles: its game does not go
+// through the server and carries on, but its relay stops and both people can be knocked on again.
+func (h *Hub) quietEndLocked(st *store.State, inv *invite) {
+	delete(h.invites, inv.id)
+	h.relay.EndSession(inv.id)
+	h.changedLocked(st, inv.from, inv.to)
 }
 
 // liveLocked says whether a console counts as on: it asked recently, or is asking now.
@@ -259,11 +305,22 @@ func (h *Hub) liveFor(number int, key []byte) *live {
 // Seen notes any request from a console.
 func (h *Hub) Seen(number int) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	l := h.liveFor(number, nil)
 	l.lastSeen = h.now()
-	if l.person != "" {
-		h.touchSeen(l.person)
+	person := l.person
+	back := l.silent
+	l.silent = false
+	h.mu.Unlock()
+	// After the lock: a save must not hold up everyone else's request.
+	if person == "" {
+		return
+	}
+	h.touchSeen(person)
+	if back {
+		st := h.store.Snapshot()
+		h.mu.Lock()
+		h.changedLocked(&st, person)
+		h.mu.Unlock()
 	}
 }
 
@@ -326,8 +383,14 @@ func (h *Hub) StreamOf(number int) int {
 	return 0
 }
 
-// push adds an event to a console's queue and wakes its long request.
+// push adds an event to a console's queue and wakes its long request. "The list changed" is said
+// once until it has been heard.
 func (l *live) push(e Event) {
+	if e.Type == "friends" && len(l.events) > 0 {
+		if last := l.events[len(l.events)-1]; last.Type == "friends" && last.Seq > l.heard {
+			return
+		}
+	}
 	l.next++
 	e.Seq = l.next
 	l.events = append(l.events, e)
@@ -372,19 +435,58 @@ func (h *Hub) FriendsChanged(people ...string) {
 }
 
 // ConsoleRemoved tells a console it was taken off the server, and ends what it was part of.
-func (h *Hub) ConsoleRemoved(number int) {
+func (h *Hub) ConsoleRemoved(number int, people []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	l := h.lives[number]
-	if l == nil {
-		return
+	if l := h.lives[number]; l != nil {
+		l.person = ""
+		l.status = StatusOffline
+		l.push(Event{Type: "removed"})
 	}
-	person := l.person
-	l.person = ""
-	l.status = StatusOffline
-	l.push(Event{Type: "removed"})
-	if person != "" {
+	for _, person := range people {
 		h.endPersonLocked(person)
+	}
+}
+
+// EndBetween ends what two people on this server have open, after their friendship was removed.
+func (h *Hub) EndBetween(a, b string) {
+	h.endMatching(func(inv *invite) bool {
+		return inv.link == "" && ((inv.from == a && inv.to == b) || (inv.from == b && inv.to == a))
+	})
+}
+
+// EndPair ends what one pair on a link has open, after that pair was removed.
+func (h *Hub) EndPair(link, ours, theirs string) {
+	h.endMatching(func(inv *invite) bool {
+		return inv.link == link && ((inv.from == ours && inv.to == theirs) || (inv.from == theirs && inv.to == ours))
+	})
+}
+
+// EndLink ends everything on a link, after it was removed.
+func (h *Hub) EndLink(link string) {
+	h.endMatching(func(inv *invite) bool { return inv.link == link })
+}
+
+// endMatching ends invites and sessions on the owner's word. A knock just goes; a game in progress
+// carries on between the consoles, but its relay stops.
+func (h *Hub) endMatching(match func(*invite) bool) {
+	st := h.store.Snapshot()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, inv := range h.invites {
+		if !match(inv) {
+			continue
+		}
+		if inv.joined {
+			h.quietEndLocked(&st, inv)
+			continue
+		}
+		delete(h.invites, inv.id)
+		h.relay.EndSession(inv.id)
+		for _, id := range []string{inv.from, inv.to} {
+			h.pushTo(&st, id, Event{Type: "invite_ended", Invite: inv.id, Reason: EndUnavailable})
+		}
+		h.changedLocked(&st, inv.from, inv.to)
 	}
 }
 
@@ -396,7 +498,8 @@ func (h *Hub) endPersonLocked(person string) {
 			continue
 		}
 		if inv.joined {
-			h.endSessionLocked(inv, person)
+			st := h.store.Snapshot()
+			h.quietEndLocked(&st, inv)
 		} else {
 			h.endInviteLocked(inv, EndCancelled, false)
 		}
@@ -464,7 +567,7 @@ func (h *Hub) Signin(number int, account, username, status string) (string, erro
 		return "", ErrBadRequest
 	}
 	id := ""
-	err := h.store.Update(func(st *store.State) error {
+	err := h.store.Change(func(st *store.State) bool {
 		p := st.PersonByAccount(number, account)
 		if p == nil {
 			count := 0
@@ -474,20 +577,26 @@ func (h *Hub) Signin(number int, account, username, status string) (string, erro
 				}
 			}
 			if count >= peoplePerConsole {
-				return ErrBadRequest
+				return false
 			}
 			st.People = append(st.People, store.Person{ID: store.NewID(), Console: number, Account: account, Username: username, LastSeen: h.now()})
 			id = st.People[len(st.People)-1].ID
-			return nil
+			return true
 		}
 		id = p.ID
+		if p.Username == username {
+			return false
+		}
 		p.Username = username
-		p.LastSeen = h.now()
-		return nil
+		return true
 	})
 	if err != nil {
 		return "", err
 	}
+	if id == "" {
+		return "", ErrBadRequest
+	}
+	h.touchSeen(id)
 	st := h.store.Snapshot()
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -555,6 +664,16 @@ func (h *Hub) Friends(number int) ([]Friend, error) {
 		return nil, ErrNoAccount
 	}
 	out := []Friend{}
+	size := 0
+	withBox := func(i *FriendInvite) *FriendInvite {
+		if i == nil {
+			return nil
+		}
+		if size += len(i.Sealed); size > maxFriendsBytes {
+			i.Sealed = ""
+		}
+		return i
+	}
 	for _, id := range st.FriendsOf(l.person) {
 		p := st.Person(id)
 		if p == nil {
@@ -568,7 +687,7 @@ func (h *Hub) Friends(number int) ([]Friend, error) {
 		if pl := h.lives[p.Console]; pl != nil {
 			f.Stream = pl.stream
 		}
-		f.Invite = h.inviteFromLocked(id, l.person)
+		f.Invite = withBox(h.inviteFromLocked(id, l.person))
 		out = append(out, f)
 	}
 	for _, link := range st.Links {
@@ -580,7 +699,7 @@ func (h *Hub) Friends(number int) ([]Friend, error) {
 			if r := h.remotes[link.ID][pair.Theirs]; r != nil && !h.behind[link.ID] {
 				f.Status = r.status
 			}
-			f.Invite = h.inviteFromLocked(pair.Theirs, l.person)
+			f.Invite = withBox(h.inviteFromLocked(pair.Theirs, l.person))
 			out = append(out, f)
 		}
 	}
@@ -636,15 +755,19 @@ func (h *Hub) Invite(number int, id, friend, sealed string) (string, error) {
 			h.mu.Unlock()
 			return "", ErrUnavailable
 		}
-		linker := h.links
-		h.mu.Unlock()
-		if err := linker.Invite(link.ID, id, me, pair.Theirs, sealed); err != nil {
-			return "", ErrUnavailable
-		}
-		h.mu.Lock()
-		defer h.mu.Unlock()
+		// In the table before the call, so one account has one invite out however fast it asks, and a
+		// join arriving straight away finds it.
 		inv.to, inv.link = pair.Theirs, link.ID
 		h.invites[id] = inv
+		linker := h.links
+		h.mu.Unlock()
+		err := linker.Invite(link.ID, id, me, pair.Theirs, sealed)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if err != nil {
+			delete(h.invites, id)
+			return "", ErrUnavailable
+		}
 		h.changedLocked(&st, me)
 		return id, nil
 	}
@@ -795,7 +918,7 @@ func (h *Hub) Join(number int, id string) (string, error) {
 	}
 	defer h.mu.Unlock()
 	st := h.store.Snapshot()
-	inv.joined = true
+	inv.joined, inv.joinedAt = true, h.now()
 	for _, other := range h.invites {
 		if other == inv {
 			continue
@@ -881,29 +1004,34 @@ func (h *Hub) endSessionLocked(inv *invite, by string) {
 
 // Report records how a session connected, once. The words become fixed log lines.
 func (h *Hub) Report(number int, id, path, reason string) error {
+	if path != "direct" && path != "relay" && path != "failed" {
+		return ErrBadRequest
+	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	inv, _, err := h.partOf(number, id)
 	if err != nil {
+		h.mu.Unlock()
 		return err
 	}
 	if inv.reported {
+		h.mu.Unlock()
 		return nil
 	}
+	inv.reported = true
+	relayed := inv.relayed
+	h.mu.Unlock()
+	// After the lock: these write to the disk.
 	switch path {
 	case "direct":
 		h.log.GameDirect()
 	case "relay":
 		h.log.GameRelayed()
-		if inv.relayed {
+		if relayed {
 			h.relay.AddGame()
 		}
 	case "failed":
 		h.log.GameFailed(logfile.ReasonFromWord(reason))
-	default:
-		return ErrBadRequest
 	}
-	inv.reported = true
 	h.store.Touch(func(s *store.State) bool {
 		switch path {
 		case "direct":
@@ -1015,6 +1143,7 @@ func (h *Hub) Wait(ctx context.Context, number, after int) (string, []Event, int
 	l := h.liveFor(number, nil)
 	l.waiting++
 	l.lastSeen = h.now()
+	l.heard = after
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
@@ -1123,6 +1252,9 @@ func (h *Hub) RemoteInvite(link, id, from, to, sealed string) error {
 
 // RemoteInviteEnded is an invite ending on the other server.
 func (h *Hub) RemoteInviteEnded(link, id, reason string) {
+	if reason != EndCancelled && reason != EndTimeout && reason != EndDeclined && reason != EndUnavailable {
+		reason = EndUnavailable
+	}
 	st := h.store.Snapshot()
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1148,10 +1280,14 @@ func (h *Hub) RemoteJoin(link, id string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	inv := h.invites[id]
-	if inv == nil || inv.link != link || !inv.fromHere || inv.joined {
+	if inv == nil || inv.link != link || !inv.fromHere {
 		return ErrUnavailable
 	}
-	inv.joined = true
+	if inv.joined {
+		// A retry after a lost answer: that join already won.
+		return nil
+	}
+	inv.joined, inv.joinedAt = true, h.now()
 	h.pushTo(&st, inv.from, Event{Type: "joined", Session: id})
 	h.changedLocked(&st, inv.from)
 	return nil

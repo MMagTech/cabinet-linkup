@@ -119,6 +119,23 @@ func TestPairing(t *testing.T) {
 	}
 }
 
+func TestADamagedKeyNeverMatches(t *testing.T) {
+	joinKey, serverKey := keys(t)
+	_, msg1, err := pairStateFor(joinKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range [][]byte{nil, {}, make([]byte, 16)} {
+		if _, err := TryFirst([][]byte{k}, serverKey, msg1); err == nil {
+			t.Errorf("a key of %d bytes must not match", len(k))
+		}
+	}
+}
+
+func pairStateFor(k KeyPair) (*Joiner, []byte, error) {
+	return NewJoiner(SlowHash("K7MR4QXT9HPV"), k)
+}
+
 func TestWrongCodeIsRefused(t *testing.T) {
 	if _, _, _, err := pair(t, SlowHash("K7MR4QXT9HPV"), SlowHash("T3WN8FJY6CRE")); err == nil {
 		t.Error("message 1 under a different code must not open")
@@ -379,7 +396,7 @@ func TestPushedAddresses(t *testing.T) {
 			t.Errorf("%q is fine", ok)
 		}
 	}
-	for _, bad := range []string{"", "http://192.168.1.1/a?x=", "x#y", "user@host", "ftp://host", "file:///etc", "a b", "a\nb", "gopher://x", `a\b`, "https://", "//x", strings.Repeat("x", 300)} {
+	for _, bad := range []string{"", "http://192.168.1.1/a?x=", "x#y", "x/reboot%3Fnow%3D1", "x/a%00", "user@host", "ftp://host", "file:///etc", "a b", "a\nb", "gopher://x", `a\b`, "https://", "//x", strings.Repeat("x", 300)} {
 		if PushedAddressOK(bad) {
 			t.Errorf("%q must be refused", bad)
 		}

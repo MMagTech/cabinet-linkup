@@ -114,7 +114,7 @@ type Service struct {
 	admitted   map[string]bool            // username and source of a connection that has started
 	ended      map[string]time.Time       // sessions the server has seen end, by tag
 	conns      map[int]*metered           // by relay port
-	allocs     map[string]int             // live connections per username
+	allocs     map[string]int             // live connections per session, by tag
 	peers      map[string]map[string]bool // peer addresses per client
 	testFailed bool
 	loggedFull bool
@@ -452,7 +452,7 @@ func (s *Service) auth(username, _ string, src net.Addr) ([]byte, bool) {
 func (s *Service) quota(username, _ string, _ net.Addr) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.allocs[username] < connectionsPerSession
+	return s.allocs[tagOf(username)] < connectionsPerSession
 }
 
 // permit decides who a connection may send to: nothing private, and a few peers. A console has
@@ -487,7 +487,7 @@ func (s *Service) events() turn.EventHandler {
 		OnAllocationCreated: func(src, _ net.Addr, _, username, _ string, relayAddr net.Addr, _ int) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			s.allocs[username]++
+			s.allocs[tagOf(username)]++
 			if c := s.conns[portOf(relayAddr)]; c != nil {
 				c.setUsername(username)
 			}
@@ -495,9 +495,9 @@ func (s *Service) events() turn.EventHandler {
 		OnAllocationDeleted: func(src, _ net.Addr, _, username, _ string) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			s.allocs[username]--
-			if s.allocs[username] <= 0 {
-				delete(s.allocs, username)
+			s.allocs[tagOf(username)]--
+			if s.allocs[tagOf(username)] <= 0 {
+				delete(s.allocs, tagOf(username))
 			}
 			delete(s.admitted, username+"|"+src.String())
 			delete(s.peers, src.String())

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,7 +57,7 @@ type Hello struct {
 // PushedAddressOK says whether an address another server told this one could be tried at all: a
 // host, a port and an optional path. PROTOCOL.md, "An address a server is told is only a candidate".
 func PushedAddressOK(address string) bool {
-	if address == "" || len(address) > 255 || strings.ContainsAny(address, "?#@ \\") {
+	if address == "" || len(address) > 255 || strings.ContainsAny(address, "?#@% \\") {
 		return false
 	}
 	for _, r := range address {
@@ -108,6 +109,9 @@ type Client struct {
 	lastT   int64
 	check   func(net.IP) error
 	dialed  net.IP
+
+	// One Open at a time: a lower t arriving second would be refused as a replay.
+	opening sync.Mutex
 }
 
 // NewClient makes a client for an address. peer is the other side's remembered key, or nil before
@@ -143,13 +147,11 @@ func (c *Client) controlDial(_, address string, _ syscall.RawConn) error {
 	if err != nil {
 		return err
 	}
-	ip := net.ParseIP(host)
 	c.mu.Lock()
 	check := c.check
-	c.dialed = ip
 	c.mu.Unlock()
 	if check != nil {
-		return check(ip)
+		return check(net.ParseIP(host))
 	}
 	return nil
 }
@@ -161,7 +163,8 @@ func (c *Client) SetDialCheck(check func(net.IP) error) {
 	c.check = check
 }
 
-// Dialed is the address last connected to.
+// Dialed is the address the last answer came from: the connection that was really used, not
+// whichever one was merely tried.
 func (c *Client) Dialed() net.IP {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -170,6 +173,8 @@ func (c *Client) Dialed() net.IP {
 
 // Prove opens a session under the remembered key, to show an address really is that server.
 func (c *Client) Prove(ctx context.Context) error {
+	c.opening.Lock()
+	defer c.opening.Unlock()
 	_, err := c.open(ctx)
 	return err
 }
@@ -199,7 +204,14 @@ func (c *Client) Peer() Hello {
 }
 
 func (c *Client) post(ctx context.Context, base string, body []byte) (int, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+Path, bytes.NewReader(body))
+	trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+		if a, ok := info.Conn.RemoteAddr().(*net.TCPAddr); ok {
+			c.mu.Lock()
+			c.dialed = a.IP
+			c.mu.Unlock()
+		}
+	}}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, base+Path, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -277,8 +289,15 @@ func (c *Client) Pair(ctx context.Context, tidy string, joining, reply any) ([]b
 	var theirs Hello
 	json.Unmarshal(hello, &theirs)
 
-	body := append([]byte{KindPairSecond}, id...)
-	status, out, err = c.post(ctx, base, append(body, msg3...))
+	// The server cannot know its reply arrived, so a lost one is asked for again with the same bytes.
+	body := append(append([]byte{KindPairSecond}, id...), msg3...)
+	for attempt := range 3 {
+		status, out, err = c.post(ctx, base, body)
+		if err == nil || ctx.Err() != nil || attempt == 2 {
+			break
+		}
+		time.Sleep(time.Second)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}
@@ -364,13 +383,12 @@ func (c *Client) Call(ctx context.Context, request, reply any) error {
 		return err
 	}
 	for attempt := range 2 {
-		c.mu.Lock()
-		session := c.session
-		c.mu.Unlock()
-		if session == nil {
-			if session, err = c.open(ctx); err != nil {
+		session, err := c.sessionFor(ctx)
+		if err != nil {
+			if errors.Is(err, ErrRemoved) || attempt == 1 || ctx.Err() != nil {
 				return err
 			}
+			continue
 		}
 		out, err := c.sealed(ctx, session, body)
 		if err == nil {
@@ -389,6 +407,19 @@ func (c *Client) Call(ctx context.Context, request, reply any) error {
 		}
 	}
 	return ErrUnreachable
+}
+
+// sessionFor gives the session in use, opening one if there is none, one Open at a time.
+func (c *Client) sessionFor(ctx context.Context) (*Session, error) {
+	c.opening.Lock()
+	defer c.opening.Unlock()
+	c.mu.Lock()
+	session := c.session
+	c.mu.Unlock()
+	if session != nil {
+		return session, nil
+	}
+	return c.open(ctx)
 }
 
 func (c *Client) sealed(ctx context.Context, session *Session, plain []byte) ([]byte, error) {

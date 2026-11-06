@@ -362,6 +362,17 @@ func (s *Store) Update(change func(*State) error) error {
 	return s.save()
 }
 
+// Change is Update for a change that may turn out to be nothing: it saves only if change says it
+// changed something, so a quiet link does not wear out an SD card.
+func (s *Store) Change(change func(*State) (changed bool)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !change(&s.state) {
+		return nil
+	}
+	return s.save()
+}
+
 // Snapshot copies the state, for reading without holding the lock.
 func (s *Store) Snapshot() State {
 	s.mu.RLock()

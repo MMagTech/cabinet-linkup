@@ -31,8 +31,10 @@ const (
 	triesPerAddress = 5
 	triesInAll      = 30
 	triesWindow     = time.Minute
-	// Tries a second, past which nothing more is tried.
-	triesCeiling = 200
+	// Codes tried a second, past which nothing more is tried: about a tenth of a core.
+	triesCeiling = 40_000
+	// Requests a second one session can make. A real console makes a few.
+	requestsPerSecond = 50
 )
 
 // LinkHandler is what the console port needs from the links: an existing link's requests, and a
@@ -50,7 +52,18 @@ const (
 	peerServer
 )
 
+// withinBudget counts one request against this second's budget. It holds the session's lock.
+func (s *session) withinBudget(now time.Time) bool {
+	if second := now.Unix(); second != s.second {
+		s.second, s.count = second, 0
+	}
+	s.count++
+	return s.count <= requestsPerSecond
+}
+
 type session struct {
+	second  int64
+	count   int
 	s       *proof.Session
 	kind    peerKind
 	console int
@@ -102,7 +115,7 @@ func NewHandler(hub *Hub, st *store.Store, log *logfile.Log, key proof.KeyPair, 
 	}
 }
 
-// ServeHTTP is the whole port. A stranger learns only that something answers.
+// ServeHTTP is the whole port. A stranger can tell it is a LinkUp server from a 403, and little more.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost || r.URL.Path != proof.Path {
 		w.WriteHeader(http.StatusNotFound)
@@ -192,15 +205,28 @@ func recent(list []time.Time, cutoff time.Time) []time.Time {
 	return kept
 }
 
-// underCeiling holds the work of trying messages down, whatever else is happening.
-func (h *Handler) underCeiling() bool {
+// overOwnLimit says whether a public source has already failed too often. It is refused before any
+// work, and does not count toward the ceiling, so one host cannot use the ceiling up for everyone.
+func (h *Handler) overOwnLimit(source string) bool {
+	key := sourceKey(source)
+	if key == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.tries[key] = recent(h.tries[key], h.now().Add(-triesWindow))
+	return len(h.tries[key]) >= triesPerAddress
+}
+
+// underCeiling holds the work of trying messages down, in codes tried, whatever else is happening.
+func (h *Handler) underCeiling(codes int) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := h.now().Unix()
 	if now != h.ceilingSecond {
 		h.ceilingSecond, h.ceilingCount = now, 0
 	}
-	h.ceilingCount++
+	h.ceilingCount += max(codes, 1)
 	return h.ceilingCount <= triesCeiling
 }
 
@@ -210,7 +236,7 @@ func (h *Handler) pairFirst(w http.ResponseWriter, r *http.Request, msg []byte) 
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	if !h.underCeiling() {
+	if h.overOwnLimit(sourceOf(r)) {
 		h.log.PairFailed()
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
@@ -224,6 +250,11 @@ func (h *Handler) pairFirst(w http.ResponseWriter, r *http.Request, msg []byte) 
 			ks = append(ks, c.K)
 			ids = append(ids, c.ID)
 		}
+	}
+	if !h.underCeiling(len(ks)) {
+		h.log.PairFailed()
+		w.WriteHeader(http.StatusTooManyRequests)
+		return
 	}
 	responder, err := proof.TryFirst(ks, h.key, msg)
 	if err != nil {
@@ -602,11 +633,29 @@ func (h *Handler) sealed(w http.ResponseWriter, r *http.Request, body []byte) {
 		return
 	}
 	// Under the lock, so two copies sent at once get one answer: the counter is marked before the work.
+	h.mu.Lock()
+	idle := h.now().Sub(s.last) > sessionIdle
+	if idle {
+		delete(h.sessions, id)
+	}
+	h.mu.Unlock()
+	if idle {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	s.mu.Lock()
 	plain, err := s.s.OpenRequest(counter, ciphertext)
+	busy := err == nil && !s.withinBudget(h.now())
 	s.mu.Unlock()
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if busy {
+		s.mu.Lock()
+		sealed := s.s.SealAnswer(counter, []byte(`{"error":"busy"}`))
+		s.mu.Unlock()
+		writeBytes(w, sealed)
 		return
 	}
 	h.mu.Lock()

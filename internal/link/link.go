@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 	"unicode"
@@ -261,8 +262,14 @@ func (m *Manager) hello(st *store.State, l store.Link) {
 	m.mu.Lock()
 	ctx := m.ctx
 	m.mu.Unlock()
+	// A link removed since the snapshot was taken stays removed.
+	gone := false
+	m.store.View(func(now *store.State) { gone = now.Link(l.ID) == nil })
+	if gone {
+		return
+	}
 	if l.Candidate != "" && time.Since(l.CandidateTried) >= candidateEvery {
-		l = m.tryCandidate(ctx, l)
+		m.startCandidate(ctx, l)
 	}
 	p := m.peerFor(l)
 	if l.Address == "" {
@@ -276,34 +283,49 @@ func (m *Manager) hello(st *store.State, l store.Link) {
 	m.noteResult(l.ID, p, err)
 }
 
-// tryCandidate is the only way a told address is ever saved: an Open under the remembered key.
-// Something on a home network cannot finish that handshake, so it is never adopted.
-func (m *Manager) tryCandidate(ctx context.Context, l store.Link) store.Link {
-	probe := m.client(l.Candidate, l.Key)
-	call, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	err := probe.Prove(call)
+// startCandidate is the only way a told address is ever saved: an Open under the remembered key.
+// Something on a home network cannot finish that handshake, so it is never adopted. It holds up
+// nothing, and the time between tries belongs to the link, however often the address changes, so a
+// linked server cannot use it to find out what is on this server's network.
+func (m *Manager) startCandidate(ctx context.Context, l store.Link) {
+	begun := false
 	now := time.Now()
-	dialed := probe.Dialed()
-	var out store.Link
-	m.store.Update(func(st *store.State) error {
+	m.store.Change(func(st *store.State) bool {
 		current := st.Link(l.ID)
-		if current == nil {
-			out = l
-			return nil
+		if current == nil || current.Candidate != l.Candidate || now.Sub(current.CandidateTried) < candidateEvery {
+			return false
 		}
 		current.CandidateTried = now
-		if err == nil && current.Candidate == l.Candidate {
-			current.Address = current.Candidate
-			current.Candidate = ""
+		begun = true
+		return true
+	})
+	if !begun {
+		return
+	}
+	go func() {
+		probe := m.client(l.Candidate, l.Key)
+		call, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if probe.Prove(call) != nil {
+			return
+		}
+		dialed := probe.Dialed()
+		adopted := false
+		m.store.Change(func(st *store.State) bool {
+			current := st.Link(l.ID)
+			if current == nil || current.Candidate != l.Candidate {
+				return false
+			}
+			current.Address, current.Candidate = current.Candidate, ""
 			current.Typed = false
 			current.ProvedPrivate = dialed != nil && relay.Blocked(dialed)
+			adopted = true
+			return true
+		})
+		if adopted {
+			m.Changed()
 		}
-		out = *current
-		out.Pairs = slices.Clone(current.Pairs)
-		return nil
-	})
-	return out
+	}()
 }
 
 // noteResult records whether a server answered, and what it stated.
@@ -419,7 +441,7 @@ func (m *Manager) Enter(address, code, person string) error {
 	case !reply.OK:
 		return store.ErrWrongCode
 	}
-	if !cleanLine(reply.Name, maxName) || !cleanLine(reply.Account.Username, 128) || reply.Account.ID == "" {
+	if !cleanLine(reply.Name, maxName) || !goodAccount(reply.Account) {
 		return store.ErrWrongCode
 	}
 	return m.addPair(key, reply.Name, person, reply.Account, func(l *store.Link) {
@@ -438,7 +460,7 @@ func (m *Manager) Accept(code store.Code, key []byte, raw []byte) (any, error) {
 	if slices.Equal(key, m.key.Public) {
 		return nil, console.ErrBadRequest
 	}
-	if !cleanLine(hello.Name, maxName) || !proof.PushedAddressOK(hello.Address) || !cleanLine(hello.Account.Username, 128) || hello.Account.ID == "" {
+	if !cleanLine(hello.Name, maxName) || !proof.PushedAddressOK(hello.Address) || !goodAccount(hello.Account) {
 		return nil, console.ErrBadRequest
 	}
 	st := m.store.Snapshot()
@@ -511,6 +533,7 @@ func (m *Manager) RemovePair(id, pair string) error {
 	if err != nil || ours == "" {
 		return err
 	}
+	m.hub.EndPair(id, ours, theirs)
 	m.hub.FriendsChanged(ours)
 	m.enqueue(id, message{Op: "link_pair_remove", Ours: ours, Theirs: theirs})
 	return nil
@@ -549,6 +572,7 @@ func (m *Manager) removeLink(id string) error {
 	if err != nil {
 		return err
 	}
+	m.hub.EndLink(id)
 	m.forget(id)
 	if m.OnRemoved != nil {
 		m.OnRemoved(id)
@@ -607,6 +631,13 @@ func (m *Manager) Relay(id, session string) (*relay.Credentials, string) {
 	if err := m.callOn(id, message{Op: "link_relay", Session: session}, &reply); err != nil {
 		return nil, "off"
 	}
+	if reply.Relay != nil {
+		for _, u := range reply.Relay.URLs {
+			if !strings.HasPrefix(u, "turn:") {
+				return nil, "off"
+			}
+		}
+	}
 	return reply.Relay, reply.Reason
 }
 
@@ -664,6 +695,16 @@ func (m *Manager) Handle(id, op string, raw []byte) any {
 	return answer{}
 }
 
+// goodAccount holds what another server says about one of its people to what one really is.
+func goodAccount(a account) bool {
+	return cleanLine(a.ID, 64) && cleanUsername(a.Username) && len(a.Key) == proof.KeySize
+}
+
+// cleanUsername holds a username to what a console may send: 128 bytes, one line.
+func cleanUsername(s string) bool {
+	return len(s) <= 128 && cleanLine(s, 128)
+}
+
 // cleanLine holds a name or an address from another server to what a person typed: one short line.
 func cleanLine(s string, limit int) bool {
 	if s == "" || utf8.RuneCountInString(s) > limit || !utf8.ValidString(s) {
@@ -686,48 +727,60 @@ func containsControl(s string) bool {
 func (m *Manager) heard(id string, h ourHello) {
 	statuses := map[string]string{}
 	var touched []string
+	var dropped []store.Pair
 	now := time.Now()
-	err := m.store.Update(func(st *store.State) error {
+	// Saved only if something saved changed: status lives in memory, and this comes every minute.
+	err := m.store.Change(func(st *store.State) bool {
 		l := st.Link(id)
 		if l == nil {
-			return nil
+			return false
 		}
-		if cleanLine(h.Name, maxName) {
-			l.Name = h.Name
+		changed := false
+		if cleanLine(h.Name, maxName) && l.Name != h.Name {
+			l.Name, changed = h.Name, true
 		}
 		if proof.PushedAddressOK(h.Address) && h.Address != l.Address && h.Address != l.Candidate {
-			l.Candidate = h.Address
-			l.CandidateTried = time.Time{}
+			l.Candidate, changed = h.Address, true
 			m.Changed()
 		}
 		kept := l.Pairs[:0]
 		for _, pair := range l.Pairs {
 			found := false
 			for _, line := range h.Pairs {
-				if line.Ours == pair.Theirs && line.Theirs == pair.Ours {
-					found = true
-					statuses[pair.Theirs] = line.Status
-					if cleanLine(line.Username, 128) && pair.TheirName != line.Username {
-						pair.TheirName = line.Username
-						touched = append(touched, pair.Ours)
-					}
-					if len(line.Key) == proof.KeySize {
-						pair.TheirKey = line.Key
-					}
-					pair.TheirStream = line.Stream
+				if line.Ours != pair.Theirs || line.Theirs != pair.Ours {
+					continue
+				}
+				found = true
+				statuses[pair.Theirs] = line.Status
+				if cleanUsername(line.Username) && pair.TheirName != line.Username {
+					pair.TheirName, changed = line.Username, true
+					touched = append(touched, pair.Ours)
+				}
+				if len(line.Key) == proof.KeySize && !slices.Equal(pair.TheirKey, line.Key) {
+					pair.TheirKey, changed = line.Key, true
+					touched = append(touched, pair.Ours)
+				}
+				if pair.TheirStream != line.Stream {
+					pair.TheirStream, changed = line.Stream, true
+					touched = append(touched, pair.Ours)
 				}
 			}
 			if found || now.Sub(pair.Added) < pairGrace {
 				kept = append(kept, pair)
 			} else {
+				dropped = append(dropped, pair)
 				touched = append(touched, pair.Ours)
+				changed = true
 			}
 		}
 		l.Pairs = kept
-		return nil
+		return changed
 	})
 	if err != nil {
 		m.log.Problem(logfile.ProblemSave)
+	}
+	for _, pair := range dropped {
+		m.hub.EndPair(id, pair.Ours, pair.Theirs)
 	}
 	var behind bool
 	m.mu.Lock()
@@ -737,10 +790,6 @@ func (m *Manager) heard(id string, h ourHello) {
 	m.mu.Unlock()
 	m.hub.RemoteStatus(id, behind, statuses)
 	m.hub.FriendsChanged(touched...)
-	st := m.store.Snapshot()
-	if l := st.Link(id); l != nil {
-		m.peerFor(*l)
-	}
 }
 
 func (m *Manager) heardPairRemoved(id, ours, theirs string) {
@@ -756,6 +805,7 @@ func (m *Manager) heardPairRemoved(id, ours, theirs string) {
 		return nil
 	})
 	if err == nil && removed {
+		m.hub.EndPair(id, ours, theirs)
 		m.hub.FriendsChanged(ours)
 	}
 }

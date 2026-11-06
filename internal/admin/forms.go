@@ -485,14 +485,13 @@ func (a *App) postConsoleRemove(w http.ResponseWriter, r *http.Request, s *sessi
 		http.Redirect(w, r, "/people", http.StatusSeeOther)
 		return
 	}
-	var touched []string
+	var touched, gone []string
 	a.saved(func(st *store.State) error {
 		c := st.ConsoleByNumber(number)
 		if c == nil {
 			return nil
 		}
 		c.Removed = true
-		var gone []string
 		for _, p := range st.People {
 			if p.Console == number {
 				gone = append(gone, p.ID)
@@ -506,7 +505,7 @@ func (a *App) postConsoleRemove(w http.ResponseWriter, r *http.Request, s *sessi
 		return nil
 	})
 	a.Log.ConsoleRemoved(number)
-	a.People.ConsoleRemoved(number)
+	a.People.ConsoleRemoved(number, gone)
 	a.People.FriendsChanged(touched...)
 	a.Links.Changed()
 	a.done(w, r, s, "/people", "Removed")
@@ -536,6 +535,7 @@ func (a *App) postFriendRemove(w http.ResponseWriter, r *http.Request, s *sessio
 	case strings.HasPrefix(id, "f:"):
 		other := strings.TrimPrefix(id, "f:")
 		a.saved(func(st *store.State) error { st.RemoveFriends(person, other); return nil })
+		a.People.EndBetween(person, other)
 		a.People.FriendsChanged(person, other)
 	case strings.HasPrefix(id, "p:"):
 		if link, pair, ok := strings.Cut(strings.TrimPrefix(id, "p:"), ":"); ok {

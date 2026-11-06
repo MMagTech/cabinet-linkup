@@ -130,6 +130,10 @@ type Responder struct {
 // that is cheap, because each hash was worked out when its code was made.
 func TryFirst(ks [][]byte, static KeyPair, msg1 []byte) (*Responder, error) {
 	for i, k := range ks {
+		if len(k) != hashLength {
+			// With no key the handshake would run with no code at all, so a damaged file must not.
+			continue
+		}
 		hs, err := pairState(k, static, false)
 		if err != nil {
 			return nil, err

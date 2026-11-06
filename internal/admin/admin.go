@@ -41,8 +41,11 @@ type People interface {
 	Online(person string) bool
 	// FriendsChanged tells these people's consoles that their lists changed.
 	FriendsChanged(people ...string)
-	// ConsoleRemoved tells a console that it was taken off the server.
-	ConsoleRemoved(number int)
+	// ConsoleRemoved tells a console that it was taken off the server, and ends what these people
+	// on it had open.
+	ConsoleRemoved(number int, people []string)
+	// EndBetween ends what two people have open, after their friendship was removed.
+	EndBetween(a, b string)
 }
 
 // LinkState is how a link is doing right now.

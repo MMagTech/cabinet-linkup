@@ -1033,13 +1033,84 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 	}
 }
 
+// A told address is tried at most once per 10 minutes, however many a linked owner sends.
+func TestToldAddressesAreTriedAtTheirOwnPace(t *testing.T) {
+	a, _, _, _ := twoLinked(t)
+	var mu sync.Mutex
+	hits := 0
+	inside := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+	}))
+	defer inside.Close()
+	id := a.s.Store.Snapshot().Links[0].ID
+	a.s.Store.Update(func(st *store.State) error {
+		st.Links[0].CandidateTried = time.Now().Add(-time.Hour)
+		return nil
+	})
+	host, port, _ := net.SplitHostPort(strings.TrimPrefix(inside.URL, "http://"))
+	for i := range 15 {
+		raw, _ := json.Marshal(map[string]any{"op": "link_hello", "name": "Riley's", "address": fmt.Sprintf("http://%s:%s/x%d", host, port, i), "pairs": []any{}})
+		a.s.Links.Handle(id, "link_hello", raw)
+		a.s.Links.Changed()
+		time.Sleep(100 * time.Millisecond)
+	}
+	time.Sleep(time.Second)
+	mu.Lock()
+	defer mu.Unlock()
+	if hits > 1 {
+		t.Errorf("%d requests inside the network", hits)
+	}
+}
+
+func TestTwoRequestsAtOnceOnANewClientBothWork(t *testing.T) {
+	b := startServer(t, "Ours")
+	alex := player(t, b.address, b.ownCode(), "alex")
+	for round := range 40 {
+		c := proof.NewClient(b.address, alex.Key, b.s.Key.Public)
+		var wg sync.WaitGroup
+		errs := make(chan error, 4)
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var reply map[string]any
+				errs <- c.Call(t.Context(), map[string]any{"op": "config"}, &reply)
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+	}
+}
+
+func TestAFriendsNewKeyReachesTheirFriendsConsole(t *testing.T) {
+	a, _, maya, _ := twoLinked(t)
+	id := a.s.Store.Snapshot().Links[0].ID
+	pair := a.s.Store.Snapshot().Links[0].Pairs[0]
+	newKey, _ := proof.NewKeyPair()
+	raw, _ := json.Marshal(map[string]any{"op": "link_hello", "name": "Riley's", "address": a.s.Store.Snapshot().Links[0].Address, "pairs": []any{
+		map[string]any{"ours": pair.Theirs, "theirs": pair.Ours, "status": "online", "username": "june", "key": newKey.Public, "stream": 1},
+	}})
+	a.s.Links.Handle(id, "link_hello", raw)
+	nextEvent(t, maya, "friends")
+	if !bytes.Equal(friendsOf(t, maya)["june"].Key, newKey.Public) {
+		t.Error("the console should hear the new key")
+	}
+}
+
 func TestAChangedAddressReachesALinkedServerOnItsOwn(t *testing.T) {
 	a, c, _, _ := twoLinked(t)
 	// c is the side that typed a's address, a was told c's. a can reach c through its proved one.
+	eventually(t, "the told address proves itself", func() bool {
+		return a.s.Store.Snapshot().Links[0].Address == c.address
+	})
 	st := a.s.Store.Snapshot()
-	if st.Links[0].Address != c.address {
-		t.Fatalf("the told address should have proved itself: %+v", st.Links[0])
-	}
 	if st.Links[0].Typed {
 		t.Error("it was told, not typed")
 	}

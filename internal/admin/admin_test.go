@@ -23,9 +23,10 @@ type fakePeople struct {
 	removed []int
 }
 
-func (f *fakePeople) Online(id string) bool           { return f.online[id] }
-func (f *fakePeople) FriendsChanged(people ...string) { f.changed = append(f.changed, people...) }
-func (f *fakePeople) ConsoleRemoved(number int)       { f.removed = append(f.removed, number) }
+func (f *fakePeople) Online(id string) bool                 { return f.online[id] }
+func (f *fakePeople) FriendsChanged(people ...string)       { f.changed = append(f.changed, people...) }
+func (f *fakePeople) ConsoleRemoved(number int, _ []string) { f.removed = append(f.removed, number) }
+func (f *fakePeople) EndBetween(string, string)             {}
 
 type fakeLinks struct {
 	state   LinkState
