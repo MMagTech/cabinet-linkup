@@ -1,0 +1,60 @@
+{{/* Server: its name and public address, an update, and the rest one press away. */}}
+
+{{define "server"}}<div class="page">
+  <header class="page-head">{{template "mark"}}<h1>Server</h1></header>
+  <div class="cards two">
+    <section class="card pad">
+      <form method="post" action="/server/about" class="form">
+        <label{{if .ErrorName}} class="bad"{{end}}><span class="label-line">Name{{template "field-error" .ErrorName}}</span><input name="name" value="{{.Name}}" maxlength="20"></label>
+        <label{{if .ErrorAddress}} class="bad"{{end}}><span class="label-line">Public address{{template "field-error" .ErrorAddress}}</span><input name="address" value="{{.Address}}" inputmode="url" placeholder="host:port" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+        <button class="btn small save">Save</button>
+      </form>
+    </section>
+    <section class="card">
+      <a class="item" href="/links"><span class="row-icon">{{template "icon-links"}}</span><span class="item-text"><span class="item-name">Linked servers</span></span>{{if .LinkCount}}<span class="status">{{.LinkCount}}</span>{{end}}{{template "icon-next"}}</a>
+      <a class="item" href="/server/settings"><span class="row-icon">{{template "icon-server"}}</span><span class="item-text"><span class="item-name">Settings</span></span>{{template "icon-next"}}</a>
+    </section>
+  </div>
+  {{if .Update}}<p class="notice">Update available: {{.Update}}. <a href="{{.UpdateURL}}">What changed</a></p>{{end}}
+</div>{{end}}
+
+{{define "server-settings"}}<div class="page">
+  <a class="back" href="/server">{{template "icon-back"}}Server</a>
+  <header class="page-head"><h1>Settings</h1></header>
+  <section class="card">
+    <div class="item"><span class="row-icon">{{template "icon-key"}}</span><div class="item-text"><div class="item-name">Password</div></div><a class="btn small" href="/password">Change</a></div>
+    <div class="item"><span class="row-icon">{{template "icon-info"}}</span><div class="item-text"><div class="item-name">Version</div></div><span class="status">{{.Version}}</span></div>
+  </section>
+  <section class="card pad">
+    <h2 class="label">Theme</h2>
+    <form method="post" action="/server/theme" class="themes">{{range .Themes}}<button class="theme{{if .Current}} current{{end}}" name="theme" value="{{.ID}}"{{if .Current}} aria-pressed="true"{{end}}><span class="swatch swatch-{{.ID}}"></span>{{.Name}}</button>{{end}}</form>
+  </section>
+  <section class="card">
+    <a class="item" href="/server/stun"><span class="row-icon">{{template "icon-connections"}}</span><span class="item-text"><span class="item-name">STUN</span></span>{{template "icon-next"}}</a>
+    <a class="item" href="/server/log"><span class="row-icon">{{template "icon-list"}}</span><span class="item-text"><span class="item-name">Log</span></span>{{template "icon-next"}}</a>
+  </section>
+  <form method="post" action="/signout"><button class="btn quiet wide">Sign out</button></form>
+</div>{{end}}
+
+{{define "server-stun"}}<div class="page">
+  <a class="back" href="/server/settings">{{template "icon-back"}}Settings</a>
+  <header class="page-head"><h1>STUN</h1><form method="post" action="/stun/reset"><button class="text-button">Reset</button></form></header>
+  <section class="card">
+    {{range .Stun}}{{template "stun" .}}{{end}}
+    <form method="post" action="/stun/add" class="item add-line"><input name="address" inputmode="url" placeholder="host:port" aria-label="Add a STUN address" autocapitalize="off" autocorrect="off" spellcheck="false"><button class="btn small">Add</button></form>
+  </section>
+</div>{{end}}
+
+{{define "server-log"}}<div class="page">
+  <a class="back" href="/server/settings">{{template "icon-back"}}Settings</a>
+  <header class="page-head"><h1>Log</h1><a class="text-button" href="/log" download>{{template "icon-download"}}Download</a></header>
+  <section class="card">
+    <div class="log" tabindex="0">{{range .Log}}<div>{{template "when-short" .At}}<span>{{.Line}}</span></div>{{else}}<div><span class="sub">No entries</span></div>{{end}}</div>
+  </section>
+</div>{{end}}
+
+{{define "stun"}}<div class="item"><div class="item-text"><div class="stun-address address">{{.Address}}</div></div>
+  <form method="post" action="/stun/up"><input type="hidden" name="id" value="{{.ID}}"><button class="icon-button" aria-label="Move up">{{template "icon-up"}}</button></form>
+  <form method="post" action="/stun/down"><input type="hidden" name="id" value="{{.ID}}"><button class="icon-button" aria-label="Move down">{{template "icon-down"}}</button></form>
+  <form method="post" action="/stun/remove"><input type="hidden" name="id" value="{{.ID}}"><button class="icon-button" aria-label="Remove">{{template "icon-close"}}</button></form>
+</div>{{end}}

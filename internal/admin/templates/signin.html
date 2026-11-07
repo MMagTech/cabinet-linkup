@@ -1,0 +1,27 @@
+{{/* Getting in: the password, changing it, and what someone sees who opens the page
+     from the internet. Anyone on the owner's network can open these, so they name no
+     container and no command; the setup guide has those. */}}
+
+{{define "signin"}}<div class="auth"><div class="auth-brand">{{template "mark"}}<span>LinkUp</span></div><div class="auth-card">
+  <form method="post" action="/signin" class="form">
+    <input type="text" name="username" value="LinkUp" autocomplete="username" hidden>
+    <label{{if .Error}} class="bad"{{end}}><span class="label-line">Password{{template "field-error" .Error}}</span><input type="password" name="password" autofocus autocomplete="current-password"></label>
+    <button class="btn primary wide">Sign in</button>
+  </form>
+  <a class="text-button center" href="https://github.com/MMagTech/cabinet-linkup#forgotten-password">Forgot password</a>
+</div></div>{{end}}
+
+{{define "password"}}{{template "sheet-top" .}}
+  <h2 class="sheet-title">Change password</h2>
+  <form method="post" action="/password" class="form">
+    <input type="text" name="username" value="LinkUp" autocomplete="username" hidden>
+    <label{{if .ErrorCurrent}} class="bad"{{end}}><span class="label-line">Current password{{template "field-error" .ErrorCurrent}}</span><input type="password" name="current" autocomplete="current-password"></label>
+    <label{{if .ErrorShort}} class="bad"{{end}}><span class="label-line">New password{{template "field-error" .ErrorShort}}</span><input type="password" name="password" autocomplete="new-password"></label>
+    <label{{if .ErrorAgain}} class="bad"{{end}}><span class="label-line">Confirm password{{template "field-error" .ErrorAgain}}</span><input type="password" name="again" autocomplete="new-password"></label>
+    <button class="btn primary wide">Save</button>
+  </form>
+{{template "sheet-end"}}{{end}}
+
+{{define "refused"}}<div class="auth"><div class="auth-brand">{{template "mark"}}<span>LinkUp</span></div><div class="auth-card">
+  <h1>Only on your home network</h1>
+</div></div>{{end}}

@@ -1,0 +1,38 @@
+{{/* Status: what opens first. The relay's use, who is on, and under them anything
+     wrong, so a notice appearing moves nothing. Each line goes to where it can be dealt with. */}}
+
+{{define "status-page"}}<div class="page">
+  <header class="page-head">{{template "mark"}}<h1>Status</h1></header>
+  <div class="cards two">
+    {{if .RelayOn}}<a class="card pad" href="/relay">
+      <h2 class="label">Relay</h2>
+      <div class="big">{{.UsedGB}} <small>of {{.LimitGB}} GB</small></div>
+      <div class="meter" role="img" aria-label="{{.UsedGB}} of {{.LimitGB}} GB used"><i class="meter-a{{if .Warn}} warn{{end}}" style="width:{{.UsedPercent}}%"></i></div>
+      <p class="sub">Resets {{.Resets}}</p>
+    </a>{{end}}
+    <section class="card">
+      <a class="item" href="/people"><span class="row-icon">{{template "icon-people"}}</span><span class="item-text"><span class="item-name">Online</span></span><span class="status">{{if .PeopleCount}}{{.OnlineCount}} of {{.PeopleCount}}{{else}}0{{end}}</span>{{template "icon-next"}}</a>
+      <a class="item" href="/people"><span class="row-icon">{{template "icon-mail"}}</span><span class="item-text"><span class="item-name">Invites waiting</span></span><span class="status">{{.Pending}}</span>{{template "icon-next"}}</a>
+      <a class="item" href="/status/games"><span class="row-icon">{{template "icon-game"}}</span><span class="item-text"><span class="item-name">Games</span></span><span class="status">{{.GamesLine}}</span>{{template "icon-next"}}</a>
+      {{if .LinkCount}}<a class="item" href="/links"><span class="row-icon">{{template "icon-links"}}</span><span class="item-text"><span class="item-name">Linked servers</span></span><span class="status">{{.LinkCount}}</span>{{template "icon-next"}}</a>{{end}}
+    </section>
+  </div>
+  {{range .Problems}}<a class="notice problem" href="{{.URL}}"><span>{{.Line}}</span>{{template "icon-next"}}</a>{{end}}
+  {{if .Update}}<a class="notice" href="/server"><span>Update available: {{.Update}}</span>{{template "icon-next"}}</a>{{end}}
+</div>{{end}}
+
+{{/* Games: how every game on this server connected, since it first started. */}}
+{{define "games-page"}}<div class="page">
+  <a class="back" href="/status">{{template "icon-back"}}Status</a>
+  <header class="page-head"><h1>Games</h1></header>
+  {{if .Games}}<section class="card pad">
+    <div class="big">{{.Direct}}% <small>direct</small></div>
+    <div class="meter" role="img" aria-label="{{.Direct}} percent direct, {{.Relayed}} percent through the relay"><i class="meter-a" style="width:{{.Direct}}%"></i><i class="meter-b" style="width:{{.Relayed}}%"></i></div>
+  </section>{{end}}
+  <section class="card">
+    <div class="item"><div class="item-text"><div class="item-name">Played</div></div><span class="status">{{.Games}}</span></div>
+    <div class="item"><div class="item-text"><div class="item-name">Direct</div></div><span class="status">{{.DirectCount}}</span></div>
+    <div class="item"><div class="item-text"><div class="item-name">Through the relay</div></div><span class="status">{{.RelayedCount}}</span></div>
+    <div class="item"><div class="item-text"><div class="item-name">Failed</div></div><span class="status">{{.Failed}}</span></div>
+  </section>
+</div>{{end}}

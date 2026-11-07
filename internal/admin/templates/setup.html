@@ -1,0 +1,52 @@
+{{/* First start: the password, the server's name and address, the relay, and the
+     code for the owner's own console. Whoever opens the page first is the owner. */}}
+
+{{define "setup-password"}}<div class="auth"><div class="auth-brand">{{template "mark"}}<span>LinkUp</span></div><div class="auth-card">
+  <p class="step">Step 1 of 4</p>
+  <h1>Create admin account</h1>
+  <form method="post" action="/setup/password" class="form">
+    <input type="text" name="username" value="LinkUp" autocomplete="username" hidden>
+    <label{{if .ErrorShort}} class="bad"{{end}}><span class="label-line">Password{{template "field-error" .ErrorShort}}</span><input type="password" name="password" autocomplete="new-password"></label>
+    <label{{if .Error}} class="bad"{{end}}><span class="label-line">Confirm password{{template "field-error" .Error}}</span><input type="password" name="again" autocomplete="new-password"></label>
+    <button class="btn primary wide">Continue</button>
+  </form>
+</div></div>{{end}}
+
+{{define "setup-address"}}<div class="auth"><div class="auth-brand">{{template "mark"}}<span>LinkUp</span></div><div class="auth-card">
+  <p class="step">Step 2 of 4</p>
+  <form method="post" action="/setup/address" class="form">
+    <label{{if .ErrorName}} class="bad"{{end}}><span class="label-line">Name{{template "field-error" .ErrorName}}</span><input name="name" value="{{.Name}}" maxlength="20"></label>
+    <label{{if .ErrorAddress}} class="bad"{{end}}><span class="label-line">Public address{{template "field-error" .ErrorAddress}}</span><input name="address" value="{{.Address}}" inputmode="url" placeholder="host:port" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+    <button class="btn primary wide">Continue</button>
+  </form>
+</div></div>{{end}}
+
+{{define "setup-relay"}}<div class="auth"><div class="auth-brand">{{template "mark"}}<span>LinkUp</span></div><div class="auth-card">
+  <p class="step">Step 3 of 4</p>
+  <h1>Relay</h1>
+  <form method="post" action="/setup/relay" class="form">
+    <label>Monthly limit<span class="inline"><input type="number" name="gb" value="{{.LimitGB}}" min="1" inputmode="numeric"><span class="unit">GB</span></span></label>
+    <button class="btn primary wide">Turn on</button>
+  </form>
+  <a class="text-button center" href="/setup/relay/skip">Skip</a>
+</div></div>{{end}}
+
+{{define "setup-own"}}<div class="auth"><div class="auth-brand">{{template "mark"}}<span>LinkUp</span></div><div class="auth-card">
+  <p class="step">Step 4 of 4</p>
+  <form method="post" action="/setup/own" class="form">
+    <label{{if .ErrorAddress}} class="bad"{{end}}><span class="label-line">Server's local address{{template "field-error" .ErrorAddress}}</span><input name="address" value="{{.HomeAddress}}" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+    <button class="btn primary wide">Continue</button>
+  </form>
+  <a class="text-button center" href="/setup/own/skip">Skip</a>
+</div></div>{{end}}
+
+{{define "setup-own-code"}}<div class="auth"><div class="auth-brand">{{template "mark"}}<span>LinkUp</span></div><div class="auth-card">
+  <h1>Type these on your console</h1>
+  <p class="sub">Settings, Streaming, LinkUp, Server, Add a server</p>
+  <div class="code-box">
+    <div class="show"><span class="sub">Address</span><span class="show-value">{{.Address}}</span></div>
+    <div class="show"><span class="sub">Code</span><span class="show-value show-code">{{.Code}}</span></div>
+  </div>
+  <p class="sub">Expires {{template "when-date" .Expires}}</p>
+  <a class="btn wide" href="/status">Done</a>
+</div></div>{{end}}

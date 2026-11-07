@@ -1,0 +1,41 @@
+{{/* People: everyone on this server, by their login with the owner's note under it
+     if there is one, then the invites waiting, under them so they move nothing. A note belongs to one person: whoever
+     used the invite, or anyone the owner gives one to on their page. Choosing someone
+     opens them: beside the list on a computer, in place of it on a phone. */}}
+
+{{define "people"}}<div class="split{{if .Selected}} has-detail{{end}}">
+  <div class="list">
+    <header class="page-head">{{template "mark"}}<h1>People</h1><a class="btn primary small" href="/people/add">{{template "icon-plus"}}Invite</a></header>
+    {{if .People}}<div class="card">{{range .People}}{{template "person-row" .}}{{end}}</div>
+    {{else}}<div class="card empty"><p class="sub">No people</p>{{if .Waiting}}{{else}}<a class="btn" href="/setup/own">Add your console</a>{{end}}</div>{{end}}
+    {{if .Waiting}}<h2 class="label">Invites waiting</h2>
+    <div class="card">{{range .Waiting}}{{template "waiting" .}}{{end}}</div>{{end}}
+  </div>
+  {{if .Selected}}<div class="detail">{{template "person" .Selected}}</div>{{end}}
+</div>{{end}}
+
+{{define "person-row"}}<a class="item" href="/people?person={{.ID}}"{{if .Current}} aria-current="true"{{end}}>{{template "avatar" .}}<span class="item-text"><span class="item-name">{{.Name}}</span>{{if .Note}}<span class="item-sub">{{.Note}}</span>{{end}}</span>{{template "status" .}}{{template "icon-next"}}</a>{{end}}
+
+{{define "person"}}<a class="detail-back" href="/people">{{template "icon-back"}}People</a>
+<a class="detail-close" href="/people" aria-label="Close">{{template "icon-close"}}</a>
+<div class="person-head">{{template "avatar" .}}<div><h2 class="detail-title">{{.Name}}</h2><p class="sub">{{if .Online}}<span class="dot-on"></span>Online{{else}}Last seen {{template "when-day" .LastSeen}}{{end}}</p></div></div>
+<h2 class="label">Friends</h2>
+<div class="card">
+  {{range .Friends}}<div class="item">{{template "avatar" .}}<div class="item-text"><div class="item-name">{{.Name}}</div>{{if .Server}}<div class="item-sub">{{.Server}}</div>{{end}}</div><form method="post" action="/friends/remove"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="person" value="{{$.ID}}"><button class="icon-button" aria-label="Remove {{.Name}}">{{template "icon-close"}}</button></form></div>{{else}}<div class="item"><span class="sub">No friends</span></div>{{end}}
+  <form method="post" action="/friends/add" class="item add-line"><input type="hidden" name="person" value="{{.ID}}"><select name="friend" aria-label="Add a friend"><option value="">Add a friend</option>{{range .CanAdd}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><button class="btn small">Add</button></form>
+</div>
+<h2 class="label">Note</h2>
+<div class="card"><form method="post" action="/people/note" class="item add-line"><input type="hidden" name="person" value="{{.ID}}"><input name="note" value="{{.Note}}" maxlength="60" aria-label="Note"><button class="btn small">Save</button></form></div>
+<div class="card foot-rows">
+  <form method="post" action="/consoles/new-code" class="item"><input type="hidden" name="id" value="{{.ConsoleID}}"><input type="hidden" name="person" value="{{.ID}}"><button class="row-button"><span class="row-icon">{{template "icon-plus"}}</span><span class="item-text"><span class="item-name">New console code</span></span>{{template "icon-next"}}</button></form>
+  <a class="item" href="/consoles/remove?id={{.ConsoleID}}&person={{.ID}}"><span class="row-icon danger">{{template "icon-close"}}</span><span class="item-text"><span class="item-name danger-text">Remove console</span></span>{{template "icon-next"}}</a>
+</div>{{end}}
+
+{{define "people-add"}}{{template "sheet-top" .}}
+  <h2 class="sheet-title">Invite a friend</h2>
+  <form method="post" action="/people/add" class="form">
+    <label>Note<input name="note" value="{{.Note}}" maxlength="60"></label>
+    {{if .Accounts}}<label>Friend of<select name="for">{{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>{{end}}
+    <button class="btn primary wide">Create invite</button>
+  </form>
+{{template "sheet-end"}}{{end}}

@@ -1,0 +1,20 @@
+/* Midnight: navy with one bright electric blue. Goes on top of admin.css. */
+:root {
+  --ground: radial-gradient(1000px 500px at 85% -15%, rgba(64, 120, 255, .3), transparent 62%), linear-gradient(180deg, #0c1428, #070b16);
+  --bg: #0a0f1e; --card: #121a2e; --sheet: #141d33; --pill: #1c2740; --line: rgba(130, 170, 255, .15);
+  --ink: #eef3ff; --dim: rgba(238, 243, 255, .7); --faint: rgba(238, 243, 255, .48);
+  --accent: #5cc8ff; --amber: #ffcf6b; --bad: #ff8f8f; --main: #2f6fed; --on-main: #fff;
+  --btn: rgba(130, 170, 255, .13); --btn-on: rgba(130, 170, 255, .21); --hover: rgba(130, 170, 255, .07);
+  --well: #0a1020; --current: rgba(92, 200, 255, .12); --tab-bg: rgba(10, 15, 30, .9); --side-bg: rgba(6, 10, 20, .6);
+}
+.btn { border-radius: 999px; }
+.meter-a { background: linear-gradient(90deg, #2f6fed, #5cc8ff); box-shadow: 0 0 12px rgba(92, 200, 255, .5); }
+.row-icon { background: rgba(92, 200, 255, .14); color: #8fdcff; }
+.status.on { color: #6fe3b0; }
+.status.on .dot, .dot-on { background: #6fe3b0; box-shadow: 0 0 8px rgba(111, 227, 176, .7); }
+.switch.on { background: #2f6fed; }
+.t1 { background: rgba(92, 200, 255, .18); color: #bfeaff; }
+.t2 { background: rgba(130, 150, 255, .22); color: #cfd6ff; }
+.t3 { background: rgba(111, 227, 176, .18); color: #bff4dc; }
+.t4 { background: rgba(190, 140, 255, .22); color: #e0cbff; }
+.t5 { background: rgba(255, 207, 107, .18); color: #ffe6ad; }

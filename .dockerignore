@@ -1,0 +1,7 @@
+.git
+.github
+data
+bin
+unraid
+*.md
+compose*.yaml

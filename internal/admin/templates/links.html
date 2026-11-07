@@ -1,0 +1,53 @@
+{{/* Linked servers, under Server: two servers, and only the accounts picked see each
+     other. Choosing a server opens it as choosing a person does. */}}
+
+{{define "links"}}<div class="split{{if .Selected}} has-detail{{end}}">
+  <div class="list">
+    <a class="back" href="/server">{{template "icon-back"}}Server</a>
+    <header class="page-head"><h1>Linked servers</h1></header>
+    <div class="card">
+      <a class="item" href="/links/make"><span class="row-icon">{{template "icon-plus"}}</span><span class="item-text"><span class="item-name">Create code</span></span>{{template "icon-next"}}</a>
+      <a class="item" href="/links/enter"><span class="row-icon">{{template "icon-links"}}</span><span class="item-text"><span class="item-name">Enter code</span></span>{{template "icon-next"}}</a>
+    </div>
+    {{if .Servers}}<h2 class="label">Linked</h2>
+    <div class="card">{{range .Servers}}{{template "link-row" .}}{{end}}</div>{{end}}
+    {{if .Waiting}}<h2 class="label">Codes waiting</h2>
+    <div class="card">{{range .Waiting}}{{template "waiting" .}}{{end}}</div>{{end}}
+  </div>
+  {{if .Selected}}<div class="detail">{{template "link" .Selected}}</div>{{end}}
+</div>{{end}}
+
+{{define "link-row"}}<a class="item" href="/links?server={{.ID}}"{{if .Current}} aria-current="true"{{end}}><span class="row-icon">{{template "icon-server"}}</span><span class="item-text"><span class="item-name">{{.Name}}</span><span class="item-sub">{{.Address}}</span></span>{{if .Behind}}<span class="status warn"><span class="dot"></span>Needs update</span>{{else}}{{if .Reachable}}<span class="status on"><span class="dot"></span>Connected</span>{{else}}<span class="status warn"><span class="dot"></span>Can't reach</span>{{end}}{{end}}{{template "icon-next"}}</a>{{end}}
+
+{{define "link"}}<a class="detail-back" href="/links">{{template "icon-back"}}Linked servers</a>
+<a class="detail-close" href="/links" aria-label="Close">{{template "icon-close"}}</a>
+<h2 class="detail-title">{{.Name}}</h2>
+<p class="sub address">{{.Address}}</p>
+{{if .BehindTheirs}}<p class="sub line-bad">{{.Name}} needs an update</p>{{else}}{{if .BehindOurs}}<p class="sub line-bad">This server needs an update</p>{{else}}{{if .Reachable}}<p class="sub"><span class="dot-on"></span>Connected</p>{{else}}<p class="sub line-bad">Can't reach since {{template "when-day" .Since}}</p>{{end}}{{end}}{{end}}
+<h2 class="label">Friends</h2>
+<div class="card">
+  <div class="item pair pair-head"><span>This server</span><span>{{.Name}}</span></div>
+  {{range .Pairs}}<div class="item pair"><span class="item-name">{{.Ours}}</span><span class="item-name">{{.Theirs}}</span><form method="post" action="/links/pairs/remove"><input type="hidden" name="pair" value="{{.ID}}"><button class="icon-button" aria-label="Remove {{.Ours}} and {{.Theirs}}">{{template "icon-close"}}</button></form></div>{{end}}
+  <a class="item" href="/links/make"><span class="row-icon">{{template "icon-plus"}}</span><span class="item-text"><span class="item-name">Add friends</span></span>{{template "icon-next"}}</a>
+</div>
+<div class="card foot-rows">
+  <a class="item" href="/links/remove?id={{.ID}}"><span class="row-icon danger">{{template "icon-close"}}</span><span class="item-text"><span class="item-name danger-text">Unlink</span></span>{{template "icon-next"}}</a>
+</div>{{end}}
+
+{{define "links-make"}}{{template "sheet-top" .}}
+  <h2 class="sheet-title">Create link code</h2>
+  <form method="post" action="/links/make" class="form">
+    <label>Account on this server<select name="for">{{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
+    <button class="btn primary wide">Create code</button>
+  </form>
+{{template "sheet-end"}}{{end}}
+
+{{define "links-enter"}}{{template "sheet-top" .}}
+  <h2 class="sheet-title">Enter link code</h2>
+  <form method="post" action="/links/enter" class="form">
+    <label{{if .ErrorAddress}} class="bad"{{end}}><span class="label-line">Server address{{template "field-error" .ErrorAddress}}</span><input name="address" value="{{.Address}}" inputmode="url" placeholder="host:port" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+    <label{{if .Error}} class="bad"{{end}}><span class="label-line">Code{{template "field-error" .Error}}</span><input class="code" name="code" value="{{.Code}}" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"></label>
+    <label>Account on this server<select name="for">{{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
+    <button class="btn primary wide">Link servers</button>
+  </form>
+{{template "sheet-end"}}{{end}}

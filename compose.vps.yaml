@@ -1,0 +1,25 @@
+# A VPS. Docker opens a published port to the whole internet, even past a firewall you have
+# set up, so the admin page is published only to the VPS itself. Reach it through an SSH
+# tunnel from your own machine: ssh -L 7846:127.0.0.1:7846 you@your-vps
+# Then open http://localhost:7846. Make the data folder first, owned by the user below:
+# mkdir data && sudo chown 1000:1000 data
+services:
+  linkup:
+    image: ghcr.io/mmagtech/cabinet-linkup:latest
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./data:/data
+    ports:
+      - "7845:7845/tcp"
+      - "127.0.0.1:7846:7846/tcp"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "2"

@@ -1,0 +1,16 @@
+# The weekly check for new Go, Pion and base-image versions. It opens a pull request; nothing
+# merges by itself.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
