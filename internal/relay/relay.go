@@ -381,28 +381,34 @@ func (s *Service) Credentials(session string) (Credentials, error) {
 	return Credentials{URLs: []string{"turn:" + host + "?transport=udp"}, Username: username, Password: s.password(username)}, nil
 }
 
-// EndSession stops a session's password and its traffic as soon as the server sees the
-// session end.
+// EndSession stops a session's password and ends its connections as soon as the server sees the
+// session end. Closing the socket is how a connection ends in Pion, and it has to happen here: by
+// now a console's own request to end one is refused, and the connection would keep that console's
+// port for the rest of its lifetime, turning away its next game from the same port.
 func (s *Service) EndSession(session string) {
 	now := time.Now()
 	tag := s.tag(session)
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.ended[tag] = now
 	for key := range s.admitted {
 		if name, _, ok := strings.Cut(key, "|"); ok && tagOf(name) == tag {
 			delete(s.admitted, key)
 		}
 	}
+	var ending []*metered
 	for _, c := range s.conns {
 		if tagOf(c.username()) == tag {
-			c.stopped.Store(true)
+			ending = append(ending, c)
 		}
 	}
 	for id, at := range s.ended {
 		if now.Sub(at) > longestSession {
 			delete(s.ended, id)
 		}
+	}
+	s.mu.Unlock()
+	for _, c := range ending {
+		c.Close()
 	}
 }
 
@@ -585,9 +591,8 @@ func (g generator) AllocateConn(string, int) (net.Conn, net.Addr, error) {
 // stranger cannot use up an owner's limit by sending at an open port.
 type metered struct {
 	net.PacketConn
-	s       *Service
-	port    int
-	stopped atomic.Bool
+	s    *Service
+	port int
 
 	mu     sync.Mutex
 	name   string
@@ -606,7 +611,10 @@ func newMetered(conn net.PacketConn, s *Service) *metered {
 
 func (m *metered) Close() error {
 	m.s.mu.Lock()
-	delete(m.s.conns, m.port)
+	// Pion closes it again when the connection ends, and the port may be another's by then.
+	if m.s.conns[m.port] == m {
+		delete(m.s.conns, m.port)
+	}
 	m.s.mu.Unlock()
 	return m.PacketConn.Close()
 }
@@ -637,9 +645,6 @@ func (m *metered) dropPeer(ip net.IP) {
 
 // allow takes n bytes from this connection's cap and from the month.
 func (m *metered) allow(n int) bool {
-	if m.stopped.Load() {
-		return false
-	}
 	m.mu.Lock()
 	now := time.Now()
 	m.tokens = min(m.tokens+now.Sub(m.last).Seconds()*capBytesPerSecond, capBytesPerSecond)
