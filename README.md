@@ -215,8 +215,12 @@ page sets a new password, so do that straight away. Nothing else is lost.
 docker compose pull && docker compose up -d
 ```
 
+`:latest` is the release, and what the compose files and the Unraid template follow. `:testing` is for
+trying what is next: it is built from every change before a release, so it can break, and going back is
+changing the tag again. Copy the data folder before trying it.
+
 The admin page tells you when a new version exists, by asking GitHub, and sends nothing about your server. An
-update is never forced. Each release is signed, so you can check an image came from this repository:
+update is never forced. Each image is signed, so you can check it came from this repository:
 
 ```bash
 cosign verify ghcr.io/mmagtech/cabinet-linkup:latest \

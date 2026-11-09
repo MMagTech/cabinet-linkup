@@ -90,7 +90,8 @@ func (c *Checker) Check(ctx context.Context) {
 }
 
 // Newer says whether version a is after version b. A version that is not plain numbers,
-// such as a test build's, is never newer and nothing is newer than it.
+// such as a :testing build's testing-1a2b3c4, is never newer and nothing is newer than it,
+// so a :testing server shows no notice: it follows main, which is ahead of every release.
 func Newer(a, b string) bool {
 	x, ok1 := parts(a)
 	y, ok2 := parts(b)

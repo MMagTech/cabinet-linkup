@@ -43,6 +43,38 @@ Consoles on one home network can only reach a relay that may send to private add
 server refuses. `LINKUP_TEST_RELAY_PRIVATE=1` allows it, and the log says so. It is for test servers only
 and stays out of the setup guide.
 
+## Trying it, then releasing it
+
+There is one branch, `main`. An image's tag is its channel:
+
+| Tag | Published | Who runs it |
+|---|---|---|
+| `:latest` and `:<version>` | On a `v*` tag | Owners. The compose files and the Unraid template follow `:latest` |
+| `:testing` | On every push to `main`, once Checks pass | The maintainer's own server, before a release |
+
+`.github/workflows/release.yml` builds and signs both, and nothing else publishes. A `:testing` server's
+version is `testing-` and the commit's first seven characters, on the Server tab and in the log, and it
+shows no update notice. When pushes land close together, only the newest becomes `:testing`.
+
+A release goes like this:
+
+1. Merge to `main`, and wait for Release in Actions to publish `:testing`.
+2. Copy your server's data folder, then switch the server to `:testing`. On Unraid: Docker, the
+   container's Edit, the Repository field ending in `:testing` instead of `:latest`, Apply.
+3. Use it with real consoles. A fix is another merge, and Apply again pulls the newest `:testing`.
+4. When it is right, tag the commit the Server tab shows, `git tag v0.1.2 <commit>`, and push the tag.
+   Then switch back to `:latest`, which is now the same code.
+
+### Going back to `:latest`
+
+Going back is changing the tag again, on the same folder, while `Format` in `internal/store` stays the
+same. An older server reads a newer one's folder and can forget what it does not know, such as a new
+setting, which then starts from its default when `:testing` runs again.
+
+Raise `Format` only when an older server would misread the file, never to add a field, and say so in the
+pull request's title. Once `:testing` has run on a raised `Format`, `:latest` refuses the folder rather
+than overwrite it, and going back means putting the copy from step 2 back.
+
 ## The rules
 
 CabinetOS's own rules apply here: search before you write, remove what you replace, no commented-out
