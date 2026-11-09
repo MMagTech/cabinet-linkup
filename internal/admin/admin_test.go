@@ -107,6 +107,10 @@ func (r *rig) do(method, path string, form url.Values, header ...string) *httpte
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	for i := 0; i+1 < len(header); i += 2 {
+		if header[i] == "Host" {
+			req.Host = header[i+1]
+			continue
+		}
 		req.Header.Set(header[i], header[i+1])
 	}
 	for _, c := range r.cookies {
@@ -732,6 +736,42 @@ func TestReverseProxyHeadersCanOnlyRefuse(t *testing.T) {
 	r.remote = "8.8.8.8:1"
 	if rec := r.do("GET", "/setup/password", nil, "X-Forwarded-For", "192.168.1.9"); rec.Code != http.StatusForbidden {
 		t.Error("a header must not be able to open it")
+	}
+}
+
+// A web page a browser at home has open can point a public name of its own at the server (DNS
+// rebinding), and to that browser it is then the server's own page, sending from a home address. So
+// first run takes only a name no stranger can point: an address, a name with no dots, or a home
+// suffix. Once the password is set, any name works, because signing in needs it.
+func TestFirstRunAsksForAHomeName(t *testing.T) {
+	r := newRig(t)
+	for host, home := range map[string]bool{
+		"rebind.attacker.example:7846": false,
+		"linkup.example.net":           false,
+		"192.168.1.10:7846":            true,
+		"[fd12::5]:7846":               true,
+		"localhost:7846":               true,
+		"tower:7846":                   true,
+		"tower.local:7846":             true,
+		"nas.home.arpa":                true,
+		"TOWER.LAN.:7846":              true,
+	} {
+		rec := r.do("GET", "/setup/password", nil, "Host", host)
+		if home && rec.Code != http.StatusOK {
+			t.Errorf("%s got %d", host, rec.Code)
+		}
+		if !home && (rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "Open it by its address")) {
+			t.Errorf("%s got %d", host, rec.Code)
+		}
+	}
+	form := url.Values{"password": {"the strangers"}, "again": {"the strangers"}}
+	if rec := r.do("POST", "/setup/password", form, "Host", "rebind.attacker.example:7846"); rec.Code != http.StatusForbidden || r.store.AdminHash() != "" {
+		t.Fatal("a page under a public name must not set the password")
+	}
+	r.setUp()
+	r.cookies = nil
+	if rec := r.do("GET", "/signin", nil, "Host", "linkup-admin.example.net"); rec.Code != http.StatusOK {
+		t.Errorf("signing in under the owner's own name got %d", rec.Code)
 	}
 }
 

@@ -55,7 +55,10 @@ container's own network hides visitors' addresses, which the relay needs, and hi
 the same machine.
 
 Then open the admin page, `http://your-server:7846`. **Whoever opens it first sets the password,**
-so do that as soon as it is running.
+so do that as soon as it is running. Until then it opens only by an address, such as
+`http://192.168.1.50:7846`, or by a name with no dots or one ending in `.local`, `.lan` or `.home.arpa`.
+A web page anyone at home has open could point a name of its own at your server and set the password
+before you, and a name like that is what it would use.
 
 ### Ports
 

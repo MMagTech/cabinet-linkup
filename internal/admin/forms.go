@@ -91,16 +91,26 @@ func (a *App) getFirstPassword(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
+	if !homeName(r.Host) {
+		a.bare(w, http.StatusForbidden, part{"setup-name", nil})
+		return
+	}
 	a.bare(w, http.StatusOK, part{"setup-password", passwordErrors{}})
 }
 
 // postFirstPassword: whoever opens the page first sets the password, as most self-hosted apps
-// do. The port is not forwarded, and on a VPS it is published only to the VPS itself.
+// do. The port is not forwarded, and on a VPS it is published only to the VPS itself. The page must
+// be opened by a name only a home network can give it, so that a web page someone at home is
+// reading cannot point its own name at the server and set the password first.
 func (a *App) postFirstPassword(w http.ResponseWriter, r *http.Request) {
 	a.first.Lock()
 	defer a.first.Unlock()
 	if a.Store.AdminHash() != "" {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	if !homeName(r.Host) {
+		a.bare(w, http.StatusForbidden, part{"setup-name", nil})
 		return
 	}
 	password := r.FormValue("password")
