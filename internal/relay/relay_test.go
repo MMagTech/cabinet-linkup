@@ -289,6 +289,41 @@ func TestConnectionsCountPerSessionNotPerPassword(t *testing.T) {
 	}
 }
 
+// A connection has started once it has a port, and only then may it outlive the password's ten
+// minutes. One the session's cap turned away has not started: counted as started, every refused try
+// kept an entry, and could open past the window once a place came free.
+func TestARefusedConnectionHasNotStarted(t *testing.T) {
+	r := newRig(t, true, 500)
+	creds, _ := r.s.Credentials("game1")
+	tag := tagOf(creds.Username)
+	r.s.mu.Lock()
+	r.s.allocs[tag] = connectionsPerSession
+	r.s.mu.Unlock()
+	for range 3 {
+		if _, err := r.client(t, creds).Allocate(); err == nil {
+			t.Fatal("a connection past the session's cap must be refused")
+		}
+	}
+	r.s.mu.Lock()
+	refused := len(r.s.admitted)
+	delete(r.s.allocs, tag)
+	r.s.mu.Unlock()
+	if refused != 0 {
+		t.Errorf("%d refused connections count as started", refused)
+	}
+	alloc, err := r.client(t, creds).Allocate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alloc.Close()
+	r.s.mu.Lock()
+	started := len(r.s.admitted)
+	r.s.mu.Unlock()
+	if started != 1 {
+		t.Errorf("a connection with a port: %d started", started)
+	}
+}
+
 func TestUsernameDoesNotCarryTheSession(t *testing.T) {
 	r := newRig(t, true, 500)
 	creds, _ := r.s.Credentials("deadbeefdeadbeef")

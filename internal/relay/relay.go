@@ -140,7 +140,7 @@ type Service struct {
 	period     time.Time
 	games      int
 	addressNow atomic.Pointer[net.IP]
-	admitted   map[string]bool            // username and source of a connection that has started
+	admitted   map[string]bool            // username and source of a connection that has a port
 	ended      map[string]time.Time       // sessions the server has seen end, by tag
 	conns      map[int]*metered           // by relay port
 	allocs     map[string]int             // live connections per session, by tag
@@ -517,16 +517,13 @@ func (s *Service) permit(client net.Addr, peer net.IP) bool {
 
 func (s *Service) events() turn.EventHandler {
 	return turn.EventHandler{
-		OnAuth: func(src, _ net.Addr, _, username, _, method string, verdict bool) {
-			if verdict && method == "Allocate" {
-				s.mu.Lock()
-				s.admitted[username+"|"+src.String()] = true
-				s.mu.Unlock()
-			}
-		},
+		// A connection has started once it has a port. Pion reports a password that checks out before
+		// the session's cap is applied, so one the cap turns away must not count: it would keep an
+		// entry for every try, and could open past its window once a place came free.
 		OnAllocationCreated: func(src, _ net.Addr, _, username, _ string, relayAddr net.Addr, _ int) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
+			s.admitted[username+"|"+src.String()] = true
 			s.allocs[tagOf(username)]++
 			if c := s.conns[portOf(relayAddr)]; c != nil {
 				c.setUsername(username)
