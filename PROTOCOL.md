@@ -171,7 +171,9 @@ answer changes from 403 to 429, so a stranger cannot lock a real code out. A pri
 what a reverse proxy looks like, counts only in the total. A ceiling of 40,000 codes tried a second
 holds the work down, about a tenth of a core, so a server with 2 waiting codes needs 20,000 requests a
 second before anyone is refused. Someone sharing a public address with a guesser is refused too, for a
-minute. Failures are logged as counts only.
+minute. Failures are logged as counts only. At most 4096 public sources are counted at once; past that
+a new one counts only in the total, as a private source does, so a guesser with many addresses cannot
+make each failure cost the server more than the last.
 
 **Offline guessing.** Whoever captures message 1, or a fake server that receives
 it, can try guesses at leisure, at one Argon2id per guess, over about 2^57.7 codes.
@@ -423,7 +425,8 @@ it is given out. A connection that has already started keeps working until the s
 ends, at most 24 hours. It is refused as soon as the server has seen the session end, and the
 session's connections end then too, so the ports the consoles used are free for their next game. A
 session can have 4 connections at once, however many passwords it asks for. The username holds a tag
-for the session, not its id.
+for the session, not its id. A connection has started once the relay has given it a port: one
+turned away for the session's 4 has not, and cannot open after the 10 minutes.
 
 It refuses to relay to private addresses: IPv4 and IPv6 loopback, private, link-local,
 unique-local, carrier-grade (100.64.0.0/10), multicast and unspecified addresses, IPv4 addresses

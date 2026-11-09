@@ -194,6 +194,37 @@ func FromHome(r *http.Request) bool {
 	return true
 }
 
+// homeSuffixes are the endings of names that no public DNS gives out, so no stranger can point one.
+var homeSuffixes = []string{".localhost", ".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain"}
+
+// homeName says whether the name a page was opened by is one only a home network can give: an
+// address, a name with no dots, such as localhost or tower, or a name with one of homeSuffixes. A web
+// page from anywhere can point a public name of its own at the server once a browser at home has
+// loaded it (DNS rebinding), and is then a page of the server's to that browser. Before there is a
+// password, that would let it set one, so first run asks for a home name.
+func homeName(host string) bool {
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	}
+	name = strings.TrimSuffix(strings.ToLower(strings.Trim(name, "[]")), ".")
+	if _, err := netip.ParseAddr(name); err == nil {
+		return true
+	}
+	if name == "" {
+		return false
+	}
+	if !strings.Contains(name, ".") {
+		return true
+	}
+	for _, suffix := range homeSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // nextStep is where first run has got to, or "" when it is finished.
 func (a *App) nextStep() string {
 	if a.Store.AdminHash() == "" {

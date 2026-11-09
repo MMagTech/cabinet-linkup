@@ -423,14 +423,24 @@ func (s *Store) save() error {
 }
 
 // AdminHash returns the admin password's hash, or "" if none has been set, which is
-// how first run knows to ask for one.
+// how first run knows to ask for one. Only a missing file means none: a file that
+// cannot be read, or holds no hash, gives lockedHash, which no password matches, so
+// a passing fault or a damaged file cannot hand first run to whoever asks next.
+// Deleting the file is still the way back from a forgotten password.
 func (s *Store) AdminHash() string {
 	var a struct{ Hash string }
-	if err := s.ReadJSON("admin.json", &a); err != nil {
+	err := s.ReadJSON("admin.json", &a)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		return ""
+	case err != nil || a.Hash == "":
+		return lockedHash
 	}
 	return a.Hash
 }
+
+// lockedHash stands for an admin.json that is there but cannot be used.
+const lockedHash = "locked"
 
 // SetAdminHash saves the admin password's hash.
 func (s *Store) SetAdminHash(hash string) error {

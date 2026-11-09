@@ -1,6 +1,8 @@
 # A home server. Forward 7845/tcp on the router, and the relay's UDP ports only if the relay
-# is on, as far as its Relay tab says. Never forward 7846: it is the admin page. Make the
-# data folder first, owned by the user below: mkdir data && sudo chown 1000:1000 data
+# is on, as far as its Relay tab says. Never forward 7846: it is the admin page, published on
+# IPv4 only, because Docker hides an IPv6 visitor's address and the page needs it to refuse one
+# from outside. Make the data folder first, owned by the user below:
+# mkdir data && sudo chown 1000:1000 data
 services:
   linkup:
     image: ghcr.io/mmagtech/cabinet-linkup:latest
@@ -13,7 +15,7 @@ services:
       - ./data:/data
     ports:
       - "7845:7845/tcp"
-      - "7846:7846/tcp"
+      - "0.0.0.0:7846:7846/tcp"
       - "3478-3510:3478-3510/udp"
     logging:
       driver: json-file

@@ -156,6 +156,28 @@ func TestDeletingAdminFileBringsBackFirstPassword(t *testing.T) {
 	}
 }
 
+// Only a missing file opens first run. A damaged one, or one the server cannot read, keeps the page
+// locked: otherwise a passing fault would let whoever asked next set the password.
+func TestADamagedAdminFileKeepsThePasswordSet(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir, noKeys)
+	path := filepath.Join(dir, "admin.json")
+	for name, damage := range map[string]func() error{
+		"cut short": func() error { return os.WriteFile(path, []byte(`{"Hash": "$argon2id$v=19$m=65536`), 0o600) },
+		"empty":     func() error { return os.WriteFile(path, nil, 0o600) },
+		"no hash":   func() error { return os.WriteFile(path, []byte(`{}`), 0o600) },
+		"a folder":  func() error { os.Remove(path); return os.Mkdir(path, 0o700) },
+	} {
+		os.RemoveAll(path)
+		if err := damage(); err != nil {
+			t.Fatal(err)
+		}
+		if s.AdminHash() == "" {
+			t.Errorf("%s: an admin.json that is there must not open first run", name)
+		}
+	}
+}
+
 func TestFriendsAndRemoving(t *testing.T) {
 	st := &State{
 		People: []Person{{ID: "a"}, {ID: "b"}, {ID: "c"}},

@@ -55,7 +55,10 @@ container's own network hides visitors' addresses, which the relay needs, and hi
 the same machine.
 
 Then open the admin page, `http://your-server:7846`. **Whoever opens it first sets the password,**
-so do that as soon as it is running.
+so do that as soon as it is running. Until then it opens only by an address, such as
+`http://192.168.1.50:7846`, or by a name with no dots or one ending in `.local`, `.lan` or `.home.arpa`.
+A web page anyone at home has open could point a name of its own at your server and set the password
+before you, and a name like that is what it would use.
 
 ### Ports
 
@@ -64,6 +67,11 @@ so do that as soon as it is running.
 | 7845/tcp | Consoles and linked servers | Yes |
 | 7846/tcp | The admin page | **Never** |
 | 3478 to 3510/udp | The relay, and its games' ports after it | Only if the relay is on, and only as far as its Relay tab says |
+
+The admin page refuses a visitor it can see is outside your home, but Docker hides the address of one
+who arrives over IPv6: the page sees Docker's own. So [compose.yaml](compose.yaml) publishes it on IPv4
+only. If you start the container another way and the server has a public IPv6 address, keep 7846 closed
+to IPv6 on your router, as most routers do unless told otherwise.
 
 Any port outside the container can lead to the console port and the admin page. The relay's ports must
 be the same outside as inside, because the relay tells consoles its own port numbers. To move them, set
@@ -233,7 +241,8 @@ An older server refuses to start on a data folder from a newer one, rather than 
 ## Forgotten password
 
 Stop the container, delete `admin.json` from the data folder and start it. The next person to open the admin
-page sets a new password, so do that straight away. Nothing else is lost.
+page sets a new password, so do that straight away. Nothing else is lost. Only a missing `admin.json` does
+this: one that is damaged or cannot be read keeps the page locked until you delete it.
 
 ## Updating
 

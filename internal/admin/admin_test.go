@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -105,6 +107,10 @@ func (r *rig) do(method, path string, form url.Values, header ...string) *httpte
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	for i := 0; i+1 < len(header); i += 2 {
+		if header[i] == "Host" {
+			req.Host = header[i+1]
+			continue
+		}
 		req.Header.Set(header[i], header[i+1])
 	}
 	for _, c := range r.cookies {
@@ -599,6 +605,69 @@ func TestSignOutAndWrongPasswords(t *testing.T) {
 	}
 }
 
+// Each try is counted before its slow hash. Counted after, every try sent at once passes the count
+// while the hash makes it wait, and a browser could check as many as it liked.
+func TestManySigninsAtOnceStillCount(t *testing.T) {
+	r := newRig(t)
+	r.setUp()
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	r.app.sessions.nowFn = func() time.Time { return now }
+	signin := func(password string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "http://192.168.1.10:8080/signin", strings.NewReader(url.Values{"password": {password}}.Encode()))
+		req.RemoteAddr = r.remote
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		r.h.ServeHTTP(rec, req)
+		return rec
+	}
+	var wg sync.WaitGroup
+	var checked, refused atomic.Int32
+	for range 4 * signinTries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch rec := signin("wrong guess"); {
+			case rec.Code == http.StatusTooManyRequests:
+				refused.Add(1)
+			case strings.Contains(rec.Body.String(), "Incorrect"):
+				checked.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if checked.Load() != signinTries || refused.Load() != 3*signinTries {
+		t.Fatalf("%d tries at once: %d checked and %d refused, want %d checked", 4*signinTries, checked.Load(), refused.Load(), signinTries)
+	}
+	if rec := signin("correct horse"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("the right password inside the minute got %d", rec.Code)
+	}
+	now = now.Add(signinWindow + time.Second)
+	for range 3 {
+		// A right password gives its try back, so the owner is never counted against.
+		if rec := signin("correct horse"); rec.Code != http.StatusSeeOther {
+			t.Fatalf("the right password after the minute got %d", rec.Code)
+		}
+	}
+	for range signinTries {
+		shows(t, signin("wrong"), "Incorrect")
+	}
+}
+
+// Only a missing admin.json opens first run. One the server cannot read keeps the page locked, so a
+// passing fault or a damaged file cannot hand the password to whoever asks next.
+func TestADamagedPasswordFileDoesNotReopenFirstRun(t *testing.T) {
+	r := newRig(t)
+	r.setUp()
+	if err := os.WriteFile(filepath.Join(r.store.Dir(), "admin.json"), []byte(`{"Hash": "$argon2id$v=19$m=65536`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.cookies = nil
+	goesTo(t, r.get("/status"), "/signin")
+	goesTo(t, r.post("/setup/password", "password", "the strangers", "again", "the strangers"), "/")
+	goesTo(t, r.get("/status"), "/signin")
+	shows(t, r.post("/signin", "password", "the strangers"), "Incorrect")
+}
+
 func TestForgottenPasswordIsDeletingTheFile(t *testing.T) {
 	r := newRig(t)
 	r.setUp()
@@ -667,6 +736,42 @@ func TestReverseProxyHeadersCanOnlyRefuse(t *testing.T) {
 	r.remote = "8.8.8.8:1"
 	if rec := r.do("GET", "/setup/password", nil, "X-Forwarded-For", "192.168.1.9"); rec.Code != http.StatusForbidden {
 		t.Error("a header must not be able to open it")
+	}
+}
+
+// A web page a browser at home has open can point a public name of its own at the server (DNS
+// rebinding), and to that browser it is then the server's own page, sending from a home address. So
+// first run takes only a name no stranger can point: an address, a name with no dots, or a home
+// suffix. Once the password is set, any name works, because signing in needs it.
+func TestFirstRunAsksForAHomeName(t *testing.T) {
+	r := newRig(t)
+	for host, home := range map[string]bool{
+		"rebind.attacker.example:7846": false,
+		"linkup.example.net":           false,
+		"192.168.1.10:7846":            true,
+		"[fd12::5]:7846":               true,
+		"localhost:7846":               true,
+		"tower:7846":                   true,
+		"tower.local:7846":             true,
+		"nas.home.arpa":                true,
+		"TOWER.LAN.:7846":              true,
+	} {
+		rec := r.do("GET", "/setup/password", nil, "Host", host)
+		if home && rec.Code != http.StatusOK {
+			t.Errorf("%s got %d", host, rec.Code)
+		}
+		if !home && (rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "Open it by its address")) {
+			t.Errorf("%s got %d", host, rec.Code)
+		}
+	}
+	form := url.Values{"password": {"the strangers"}, "again": {"the strangers"}}
+	if rec := r.do("POST", "/setup/password", form, "Host", "rebind.attacker.example:7846"); rec.Code != http.StatusForbidden || r.store.AdminHash() != "" {
+		t.Fatal("a page under a public name must not set the password")
+	}
+	r.setUp()
+	r.cookies = nil
+	if rec := r.do("GET", "/signin", nil, "Host", "linkup-admin.example.net"); rec.Code != http.StatusOK {
+		t.Errorf("signing in under the owner's own name got %d", rec.Code)
 	}
 }
 

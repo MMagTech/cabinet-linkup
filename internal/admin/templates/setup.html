@@ -12,6 +12,11 @@
   </form>
 </div></div>{{end}}
 
+{{define "setup-name"}}<div class="auth"><div class="auth-brand">{{template "mark"}}<span>LinkUp</span></div><div class="auth-card">
+  <h1>Open it by its address</h1>
+  <p class="sub">To set the password, open this page by the server's own address on your network, such as http://192.168.1.50:7846, or by its name with no dots in it.</p>
+</div></div>{{end}}
+
 {{define "setup-address"}}<div class="auth"><div class="auth-brand">{{template "mark"}}<span>LinkUp</span></div><div class="auth-card">
   <p class="step">Step 2 of 4</p>
   <form method="post" action="/setup/address" class="form">

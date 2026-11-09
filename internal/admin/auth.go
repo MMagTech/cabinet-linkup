@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -90,11 +91,11 @@ type session struct {
 	flash   *Notice
 }
 
-// sessions holds who is signed in and how many wrong passwords came lately.
+// sessions holds who is signed in and the password tries made lately.
 type sessions struct {
 	mu    sync.Mutex
 	byID  map[string]*session
-	wrong []time.Time
+	tries []time.Time
 	nowFn func() time.Time
 }
 
@@ -181,24 +182,31 @@ func (s *sessions) takeFlash(se *session) *Notice {
 	return n
 }
 
-// tooManyWrong says whether sign-ins are waiting after too many wrong passwords. It is checked
-// before the slow hash, so a flood of guesses costs nothing.
-func (s *sessions) tooManyWrong() bool {
+// takeTry counts one password try before its slow hash, or says false when the tries are used up,
+// so a flood of guesses costs nothing. Counting first is what holds the limit when many tries
+// arrive at once: they queue for the hash one at a time, already counted. A right password gives
+// its try back.
+func (s *sessions) takeTry() (giveBack func(), ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cutoff := s.nowFn().Add(-signinWindow)
-	kept := s.wrong[:0]
-	for _, at := range s.wrong {
+	now := s.nowFn()
+	cutoff := now.Add(-signinWindow)
+	kept := s.tries[:0]
+	for _, at := range s.tries {
 		if at.After(cutoff) {
 			kept = append(kept, at)
 		}
 	}
-	s.wrong = kept
-	return len(s.wrong) >= signinTries
-}
-
-func (s *sessions) countWrong() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.wrong = append(s.wrong, s.nowFn())
+	s.tries = kept
+	if len(s.tries) >= signinTries {
+		return nil, false
+	}
+	s.tries = append(s.tries, now)
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if i := slices.Index(s.tries, now); i >= 0 {
+			s.tries = slices.Delete(s.tries, i, i+1)
+		}
+	}, true
 }
