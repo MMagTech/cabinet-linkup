@@ -26,6 +26,7 @@
   <h1>Relay</h1>
   <form method="post" action="/setup/relay" class="form">
     <label>Monthly limit<span class="inline"><input type="number" name="gb" value="{{.LimitGB}}" min="1" inputmode="numeric"><span class="unit">GB</span></span></label>
+    {{template "games-at-once" .}}
     <button class="btn primary wide">Turn on</button>
   </form>
   <a class="text-button center" href="/setup/relay/skip">Skip</a>

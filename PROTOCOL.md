@@ -412,6 +412,12 @@ A TURN server in the container, off until its owner turns it on, on UDP (3478 an
 range, set by the owner). The host's server's relay is used first, and the friend's if the
 host's is off.
 
+The range is the ports right after the relay's own, two for each relayed game at once the owner
+allows, at most 16 games: 3479 to 3482 for two. A connection gets one of them, so a game uses one or
+two, and a connection past the owner's number is refused. The address in `urls` is where the STUN
+list sees the server's packets come from, never what its public address's name leads to, which is a
+reverse proxy's address behind one.
+
 A `relay` password belongs to one session. A new connection can use it for 10 minutes after
 it is given out. A connection that has already started keeps working until the session
 ends, at most 24 hours. It is refused as soon as the server has seen the session end, and the

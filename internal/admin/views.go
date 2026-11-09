@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/MMagTech/cabinet-linkup/internal/link"
+	"github.com/MMagTech/cabinet-linkup/internal/relay"
 	"github.com/MMagTech/cabinet-linkup/internal/store"
 	"github.com/MMagTech/cabinet-linkup/internal/update"
 )
@@ -18,8 +19,8 @@ import (
 const tints = 5
 
 type friendView struct {
-	ID, Name, Server, Letter string
-	Tint                     int
+	ID, Name, Server, Console, Letter string
+	Tint                              int
 }
 
 type option struct {
@@ -28,6 +29,7 @@ type option struct {
 
 type personView struct {
 	ID, Name, Note, Letter, LastSeen string
+	Console                          string // only for a login another person has too
 	Tint, ConsoleID                  int
 	Online, Current                  bool
 	Friends                          []friendView
@@ -45,7 +47,7 @@ type peopleView struct {
 }
 
 type pairView struct {
-	ID, Ours, Theirs string
+	ID, Ours, OursConsole, Theirs string
 }
 
 type linkView struct {
@@ -82,6 +84,8 @@ type relayView struct {
 	UsedGB, Resets, Found, GamesMonthText string
 	LimitGB, UsedPercent, ResetDay        int
 	GamesMonth                            int
+	GamesAtOnce, MaxGames                 int
+	FirstPort, LastPort                   int
 }
 
 type serverView struct {
@@ -134,35 +138,53 @@ func letterOf(name string) string {
 	return "?"
 }
 
-// accountOptions lists this server's people for a pick. A login is not unique across consoles,
-// so one that appears twice says which console it means.
-func accountOptions(st *store.State, skip func(store.Person) bool) []option {
-	count := map[string]int{}
-	for _, p := range st.People {
-		count[p.Username]++
+// A login is not unique across consoles: one RomM account on two consoles is two people with one
+// name. Wherever such a person is shown, their console tells them apart.
+func sharesName(st *store.State, p store.Person) bool {
+	for _, o := range st.People {
+		if o.ID != p.ID && o.Username == p.Username {
+			return true
+		}
 	}
+	return false
+}
+
+// consoleLine is the line under a person's name that tells them apart, or "".
+func consoleLine(st *store.State, p store.Person) string {
+	if !sharesName(st, p) {
+		return ""
+	}
+	return "Console " + strconv.Itoa(p.Console)
+}
+
+// nameOf is a person's name on one line, with their console if another person has the same name.
+func nameOf(st *store.State, p store.Person) string {
+	if !sharesName(st, p) {
+		return p.Username
+	}
+	return fmt.Sprintf("%s, console %d", p.Username, p.Console)
+}
+
+// accountOptions lists this server's people for a pick.
+func accountOptions(st *store.State, skip func(store.Person) bool) []option {
 	var out []option
 	for _, p := range st.People {
 		if skip != nil && skip(p) {
 			continue
 		}
-		name := p.Username
-		if count[name] > 1 {
-			name = fmt.Sprintf("%s, console %d", name, p.Console)
-		}
-		out = append(out, option{ID: p.ID, Name: name})
+		out = append(out, option{ID: p.ID, Name: nameOf(st, p)})
 	}
 	return out
 }
 
 func (a *App) person(st *store.State, p store.Person, selected string) personView {
 	v := personView{
-		ID: p.ID, Name: p.Username, Note: p.Note, Letter: letterOf(p.Username), Tint: tintOf(p.Username),
+		ID: p.ID, Name: p.Username, Note: p.Note, Console: consoleLine(st, p), Letter: letterOf(p.Username), Tint: tintOf(p.Username),
 		ConsoleID: p.Console, LastSeen: rfc(p.LastSeen), Online: a.People.Online(p.ID), Current: p.ID == selected,
 	}
 	for _, id := range st.FriendsOf(p.ID) {
 		if f := st.Person(id); f != nil {
-			v.Friends = append(v.Friends, friendView{ID: "f:" + f.ID, Name: f.Username, Letter: letterOf(f.Username), Tint: tintOf(f.Username)})
+			v.Friends = append(v.Friends, friendView{ID: "f:" + f.ID, Name: f.Username, Console: consoleLine(st, *f), Letter: letterOf(f.Username), Tint: tintOf(f.Username)})
 		}
 	}
 	for _, l := range st.Links {
@@ -217,11 +239,11 @@ func (a *App) linkRow(st *store.State, l store.Link, selected string) linkView {
 		Current: l.ID == selected,
 	}
 	for _, pair := range l.Pairs {
-		ours := ""
+		ours, console := "", ""
 		if p := st.Person(pair.Ours); p != nil {
-			ours = p.Username
+			ours, console = p.Username, consoleLine(st, *p)
 		}
-		v.Pairs = append(v.Pairs, pairView{ID: pair.ID, Ours: ours, Theirs: pair.TheirName})
+		v.Pairs = append(v.Pairs, pairView{ID: pair.ID, Ours: ours, OursConsole: console, Theirs: pair.TheirName})
 	}
 	return v
 }
@@ -279,6 +301,7 @@ func (a *App) relayView() relayView {
 		On: r.On, UsedGB: gb(r.UsedBytes), LimitGB: int(r.LimitBytes / 1_000_000_000), UsedPercent: used,
 		Warn: used >= 90, AtLimit: r.AtLimit, Resets: r.Resets.Format("January 2"), ResetDay: day,
 		GamesMonth: r.Games, GamesMonthText: plural(r.Games, "game"), Found: found, TestFailed: r.TestFailed,
+		GamesAtOnce: r.GamesAtOnce, MaxGames: relay.MaxGames, FirstPort: r.FirstPort, LastPort: r.LastPort,
 	}
 }
 

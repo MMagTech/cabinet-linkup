@@ -30,9 +30,7 @@ type Config struct {
 	Data         string
 	ConsoleAddr  string
 	AdminAddr    string
-	RelayPort    int
-	RelayMin     int
-	RelayMax     int
+	RelayPort    int  // the games' ports follow it
 	RelayPrivate bool // testing only: consoles on one home network
 	Version      string
 	Out          io.Writer
@@ -82,7 +80,7 @@ func New(cfg Config) (*Server, error) {
 	var key proof.KeyPair
 	st.View(func(s *store.State) { key = proof.KeyPair{Private: s.ServerKey, Public: s.ServerPub} })
 
-	rel := relay.New(relay.Config{Port: cfg.RelayPort, PortMin: cfg.RelayMin, PortMax: cfg.RelayMax, AllowPrivate: cfg.RelayPrivate}, st, log)
+	rel := relay.New(relay.Config{Port: cfg.RelayPort, AllowPrivate: cfg.RelayPrivate}, st, log)
 	hub := console.NewHub(st, log, rel)
 	links := link.New(st, log, hub, key)
 	hub.SetLinker(links)

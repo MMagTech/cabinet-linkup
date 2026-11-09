@@ -14,6 +14,7 @@ import (
 
 	"github.com/MMagTech/cabinet-linkup/internal/logfile"
 	"github.com/MMagTech/cabinet-linkup/internal/proof"
+	"github.com/MMagTech/cabinet-linkup/internal/relay"
 	"github.com/MMagTech/cabinet-linkup/internal/store"
 )
 
@@ -232,7 +233,9 @@ func (a *App) postSetupAddress(w http.ResponseWriter, r *http.Request, _ *sessio
 }
 
 type setupRelayView struct {
-	LimitGB int
+	LimitGB               int
+	GamesAtOnce, MaxGames int
+	FirstPort, LastPort   int
 }
 
 func (a *App) getSetupRelay(w http.ResponseWriter, r *http.Request, _ *session) {
@@ -241,14 +244,21 @@ func (a *App) getSetupRelay(w http.ResponseWriter, r *http.Request, _ *session) 
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	a.bare(w, http.StatusOK, part{"setup-relay", setupRelayView{LimitGB: st.Settings.RelayLimitGB}})
+	rel := a.Relay.Status()
+	a.bare(w, http.StatusOK, part{"setup-relay", setupRelayView{
+		LimitGB: st.Settings.RelayLimitGB, GamesAtOnce: rel.GamesAtOnce, MaxGames: relay.MaxGames, FirstPort: rel.FirstPort, LastPort: rel.LastPort,
+	}})
 }
 
 func (a *App) postSetupRelay(w http.ResponseWriter, r *http.Request, _ *session) {
 	limit, err := strconv.Atoi(field(r, "gb"))
+	games, errGames := strconv.Atoi(field(r, "games"))
 	a.saved(func(st *store.State) error {
 		if err == nil && limit >= 1 {
 			st.Settings.RelayLimitGB = limit
+		}
+		if errGames == nil {
+			st.Settings.RelayGames = min(max(games, 1), relay.MaxGames)
 		}
 		st.Settings.Relay = true
 		st.Setup.RelayDone = true
@@ -571,12 +581,16 @@ func (a *App) postRelayTest(w http.ResponseWriter, r *http.Request, s *session) 
 func (a *App) postRelayLimit(w http.ResponseWriter, r *http.Request, s *session) {
 	limit, errLimit := strconv.Atoi(field(r, "gb"))
 	day, errDay := strconv.Atoi(field(r, "day"))
+	games, errGames := strconv.Atoi(field(r, "games"))
 	a.saved(func(st *store.State) error {
 		if errLimit == nil && limit >= 1 {
 			st.Settings.RelayLimitGB = limit
 		}
 		if errDay == nil {
 			st.Settings.RelayResetDay = min(max(day, 1), 31)
+		}
+		if errGames == nil {
+			st.Settings.RelayGames = min(max(games, 1), relay.MaxGames)
 		}
 		return nil
 	})
@@ -713,7 +727,7 @@ func (a *App) postLinkMake(w http.ResponseWriter, r *http.Request, s *session) {
 		http.Redirect(w, r, "/links/make", http.StatusSeeOther)
 		return
 	}
-	c, ok := a.addCode(w, r, s, store.Code{Kind: store.CodeLink, Note: "For " + p.Username, For: id}, "/links")
+	c, ok := a.addCode(w, r, s, store.Code{Kind: store.CodeLink, Note: "For " + nameOf(&st, *p), For: id}, "/links")
 	if ok {
 		http.Redirect(w, r, "/links/code?id="+c.ID, http.StatusSeeOther)
 	}
@@ -728,7 +742,7 @@ func (a *App) getLinkCode(w http.ResponseWriter, r *http.Request, s *session) {
 	}
 	name := ""
 	if p := st.Person(c.For); p != nil {
-		name = p.Username
+		name = nameOf(&st, *p)
 	}
 	a.app(w, s, navView{OnLinks: true}, part{"links", a.linksView("")}, part{"ready", readyView{
 		Title: "Link code", Who: "For " + name, Intro: "Let's link our servers. This code is for " + name + ".", Steps: linkSteps,

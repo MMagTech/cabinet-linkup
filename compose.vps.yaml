@@ -16,8 +16,7 @@ services:
     ports:
       - "7845:7845/tcp"
       - "127.0.0.1:7846:7846/tcp"
-      - "3478:3478/udp"
-      - "49160-49200:49160-49200/udp"
+      - "3478-3510:3478-3510/udp"
     logging:
       driver: json-file
       options:

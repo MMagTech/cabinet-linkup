@@ -766,3 +766,66 @@ func TestSignedOutGetsNothing(t *testing.T) {
 }
 
 func osRemove(path string) error { return os.Remove(path) }
+
+// One RomM account on two consoles is two people with one name: each says its console wherever it is
+// shown, after the note if there is one. A name nobody else has is shown as it was.
+func TestSameNameShowsItsConsole(t *testing.T) {
+	r := newRig(t)
+	r.setUp()
+	r.fill()
+	r.store.Update(func(st *store.State) error { st.Person("a4").Note = "Upstairs"; return nil })
+	r.people.online["a1"] = true
+	people := r.get("/people").Body.String()
+	for _, want := range []string{`<span class="item-sub">Console 1</span>`, `<span class="item-sub">Console 3 · Upstairs</span>`,
+		`<span class="item-sub">My daughter</span>`, `<span class="item-sub">From college</span>`} {
+		if !strings.Contains(people, want) {
+			t.Errorf("People is missing %q", want)
+		}
+	}
+	if strings.Contains(people, "Console 2") {
+		t.Error("alex is the only alex, so alex's console stays off the page")
+	}
+	shows(t, r.get("/people?person=a1"), "Online · Console 1")
+	shows(t, r.get("/people?person=a3"), `<div class="item-name">admin</div><div class="item-sub">Console 1</div>`, ">admin, console 3</option>")
+	shows(t, r.get("/links?server=l1"), `<span class="item-name">admin</span><span class="item-sub">Console 1</span>`)
+	shows(t, r.get("/people/add"), ">admin, console 1</option>", ">admin, console 3</option>", ">maya</option>")
+	goesTo(t, r.post("/links/make", "for", "a4"), "/links/code?id="+r.newestCode())
+	shows(t, r.get("/links/code?id="+r.newestCode()), "For admin, console 3", "This code is for admin, console 3.")
+}
+
+func (r *rig) newestCode() string {
+	var id string
+	r.store.View(func(st *store.State) { id = st.Codes[len(st.Codes)-1].ID })
+	return id
+}
+
+// Games at once, on the Relay tab and in first run, with the one range to forward for them.
+func TestGamesAtOnce(t *testing.T) {
+	r := newRig(t)
+	r.post("/setup/password", "password", "correct horse", "again", "correct horse")
+	r.post("/setup/address", "name", "Our server", "address", "linkup.example.net:7845")
+	r.relay.status.GamesAtOnce, r.relay.status.FirstPort, r.relay.status.LastPort = 2, 3478, 3482
+	shows(t, r.get("/setup/relay"), "Games at once", `name="games" value="2" min="1" max="16"`, `data-games="3478"`,
+		`Forward UDP 3478 to <span data-last>3482</span> on your router`)
+	goesTo(t, r.post("/setup/relay", "gb", "200", "games", "3"), "/")
+	r.store.View(func(st *store.State) {
+		if st.Settings.RelayGames != 3 || !st.Settings.Relay {
+			t.Errorf("%+v", st.Settings)
+		}
+	})
+	r.get("/setup/own/skip")
+	r.relay.status.On = true
+	r.relay.status.GamesAtOnce, r.relay.status.LastPort = 3, 3484
+	shows(t, r.get("/relay"), "Games at once", `name="games" value="3"`, `Forward UDP 3478 to <span data-last>3484</span> on your router`)
+	for _, c := range []struct {
+		games string
+		want  int
+	}{{"40", 16}, {"0", 1}, {"nonsense", 1}, {"5", 5}} {
+		goesTo(t, r.post("/relay/limit", "gb", "500", "day", "1", "games", c.games), "/relay")
+		r.store.View(func(st *store.State) {
+			if st.Settings.RelayGames != c.want {
+				t.Errorf("games %q saved as %d, want %d", c.games, st.Settings.RelayGames, c.want)
+			}
+		})
+	}
+}

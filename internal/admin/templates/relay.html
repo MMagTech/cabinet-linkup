@@ -1,6 +1,7 @@
-{{/* Relay: the switch, the month's data and relayed games, the limit, the address it
-     found and Test. Off shows only the switch. A reached limit or a failed test goes
-     on the line beside it, so nothing moves. */}}
+{{/* Relay: the switch, the month's data and relayed games, the limit, how many games
+     at once with the one range to forward for them, the address it found and Test. Off
+     shows only the switch. A reached limit or a failed test goes on the line beside it,
+     so nothing moves. */}}
 
 {{define "relay"}}<div class="page">
   <header class="page-head">{{template "mark"}}<h1>Relay</h1></header>
@@ -18,6 +19,7 @@
       <form method="post" action="/relay/limit" class="form">
         <label>Monthly limit<span class="inline"><input type="number" name="gb" value="{{.LimitGB}}" min="1" inputmode="numeric"><span class="unit">GB</span></span></label>
         <label>Resets on day<input type="number" name="day" value="{{.ResetDay}}" min="1" max="31" inputmode="numeric"></label>
+        {{template "games-at-once" .}}
         <button class="btn small save">Save</button>
       </form>
     </section>

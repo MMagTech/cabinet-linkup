@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/pion/logging"
+	"github.com/pion/stun/v3"
 	"github.com/pion/turn/v4"
 
 	"github.com/MMagTech/cabinet-linkup/internal/logfile"
@@ -55,13 +57,37 @@ const (
 	saveEvery    = time.Minute
 	findEvery    = 5 * time.Minute
 	testDeadline = 5 * time.Second
+	stunDeadline = 3 * time.Second
 )
+
+// How many relayed games can run at once, which the owner picks on the admin page. Each game takes
+// two ports at most, one for each console, right after the relay's own port, so the owner forwards
+// one line: 3478 to 3482 for two games. The container maps the ports for MaxGames, and a port past
+// the owner's number is never opened.
+const (
+	MaxGames     = 16
+	DefaultGames = 2
+	portsPerGame = 2
+)
+
+// GamesAtOnce is the owner's number as the relay uses it: a data folder from before it was asked
+// for has none.
+func GamesAtOnce(chosen int) int {
+	if chosen < 1 {
+		return DefaultGames
+	}
+	return min(chosen, MaxGames)
+}
+
+// Forward is what the owner forwards on their router for a number of games at once: the relay's
+// port and the games' ports after it, as one range.
+func Forward(port, games int) (first, last int) {
+	return port, port + portsPerGame*GamesAtOnce(games)
+}
 
 // Config is what the owner sets when starting the container.
 type Config struct {
 	Port         int
-	PortMin      int
-	PortMax      int
 	AllowPrivate bool // only for testing consoles on one home network; the log says so
 	found        net.IP
 }
@@ -82,14 +108,17 @@ type Credentials struct {
 
 // Status is what the admin page shows.
 type Status struct {
-	On         bool
-	Found      string
-	UsedBytes  uint64
-	LimitBytes uint64
-	Games      int
-	AtLimit    bool
-	Resets     time.Time
-	TestFailed bool
+	On          bool
+	Found       string
+	UsedBytes   uint64
+	LimitBytes  uint64
+	Games       int
+	AtLimit     bool
+	Resets      time.Time
+	TestFailed  bool
+	GamesAtOnce int
+	FirstPort   int // what to forward, as one range
+	LastPort    int
 }
 
 // Service runs the relay and counts what passes through it.
@@ -326,23 +355,28 @@ func (s *Service) AddGame() {
 // Status is the relay as the admin page shows it.
 func (s *Service) Status() Status {
 	s.applyLimit(time.Now())
-	var resetDay int
+	var resetDay, games int
 	var on bool
 	s.store.View(func(st *store.State) {
 		resetDay = st.Settings.RelayResetDay
 		on = st.Settings.Relay
+		games = GamesAtOnce(st.Settings.RelayGames)
 	})
+	first, last := Forward(s.cfg.Port, games)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Status{
-		On:         on,
-		Found:      s.foundLocked(),
-		UsedBytes:  s.used.Load(),
-		LimitBytes: s.limit.Load(),
-		Games:      s.games,
-		AtLimit:    s.full.Load(),
-		Resets:     NextReset(time.Now(), resetDay),
-		TestFailed: s.testFailed,
+		On:          on,
+		Found:       s.foundLocked(),
+		UsedBytes:   s.used.Load(),
+		LimitBytes:  s.limit.Load(),
+		Games:       s.games,
+		AtLimit:     s.full.Load(),
+		Resets:      NextReset(time.Now(), resetDay),
+		TestFailed:  s.testFailed,
+		GamesAtOnce: games,
+		FirstPort:   first,
+		LastPort:    last,
 	}
 }
 
@@ -546,7 +580,8 @@ func (s *Service) count(n int) bool {
 	return true
 }
 
-// generator hands Pion a socket for each connection, in the owner's port range, counted.
+// generator hands Pion a socket for each connection, on one of the games' ports the owner's number
+// allows, counted. A port is opened only for a connection and closed when it ends.
 type generator struct{ s *Service }
 
 func (g generator) Validate() error { return nil }
@@ -562,13 +597,15 @@ func (g generator) AllocatePacketConn(network string, _ int) (net.PacketConn, ne
 	if (network == "udp4") != (address.To4() != nil) {
 		return nil, nil, errors.New("no address of that family")
 	}
-	span := s.cfg.PortMax - s.cfg.PortMin + 1
+	var games int
+	s.store.View(func(st *store.State) { games = GamesAtOnce(st.Settings.RelayGames) })
+	span := portsPerGame * games
 	first, err := rand.Int(rand.Reader, big.NewInt(int64(span)))
 	if err != nil {
 		return nil, nil, err
 	}
 	for i := range span {
-		port := s.cfg.PortMin + (int(first.Int64())+i)%span
+		port := s.cfg.Port + 1 + (int(first.Int64())+i)%span
 		conn, err := net.ListenPacket(network, ":"+strconv.Itoa(port))
 		if err != nil {
 			continue
@@ -691,7 +728,7 @@ func (s *Service) sendable(addr net.Addr) bool {
 		return false
 	}
 	if own := s.addressNow.Load(); own != nil && a.IP.Equal(*own) {
-		return a.Port == s.cfg.Port || (a.Port >= s.cfg.PortMin && a.Port <= s.cfg.PortMax)
+		return a.Port >= s.cfg.Port && a.Port <= s.cfg.Port+portsPerGame*MaxGames
 	}
 	return true
 }
@@ -771,10 +808,14 @@ func HostOf(address string) string {
 	return strings.Trim(a, "[]")
 }
 
-// findAddress works out the address to hand to consoles. It starts from the owner's own
-// public address: an IP as it stands, a name looked up each time so a dynamic name is
-// followed. If that gives nothing public, as with a reverse proxy's or a VPN's address, it
-// asks the STUN list what the outside world sees.
+// findAddress works out the address to hand to consoles: where the STUN list sees this server's
+// packets come from. A relayed game's packets leave the same way, and nothing in front of the console
+// port can change that answer. The public address's name is no guide: behind a reverse proxy, or a
+// service like Cloudflare, it leads to whatever answers for it. IPv4 first, then IPv6 for a server
+// with no IPv4.
+//
+// A test server for consoles on one home network takes its public address's own name first: there it
+// is the server's local address, the one those consoles reach.
 func (s *Service) findAddress() {
 	if s.cfg.found != nil {
 		s.setAddress(s.cfg.found)
@@ -788,14 +829,18 @@ func (s *Service) findAddress() {
 			stunList = append(stunList, x.Address)
 		}
 	})
-	if ip := s.fromName(HostOf(public)); ip != nil {
-		s.setAddress(ip)
-		return
-	}
-	for _, server := range stunList {
-		if ip := askStun(server); ip != nil && (s.cfg.AllowPrivate || !Blocked(ip)) {
+	if s.cfg.AllowPrivate {
+		if ip := s.fromName(HostOf(public)); ip != nil {
 			s.setAddress(ip)
 			return
+		}
+	}
+	for _, network := range []string{"udp4", "udp6"} {
+		for _, server := range stunList {
+			if ip := askStun(network, server); ip != nil && (s.cfg.AllowPrivate || !Blocked(ip)) {
+				s.setAddress(ip)
+				return
+			}
 		}
 	}
 	s.setAddress(nil)
@@ -813,6 +858,7 @@ func (s *Service) setAddress(ip net.IP) {
 	}
 }
 
+// fromName looks up the public address's host for a test server, IPv4 first.
 func (s *Service) fromName(host string) net.IP {
 	if host == "" {
 		return nil
@@ -831,9 +877,6 @@ func (s *Service) fromName(host string) net.IP {
 	}
 	var v6 net.IP
 	for _, ip := range ips {
-		if !s.cfg.AllowPrivate && Blocked(ip) {
-			continue
-		}
 		if ip.To4() != nil {
 			return ip
 		}
@@ -842,33 +885,57 @@ func (s *Service) fromName(host string) net.IP {
 	return v6
 }
 
-func askStun(server string) net.IP {
-	conn, err := net.ListenPacket("udp4", ":0")
+// askStun asks one STUN server, over IPv4 or IPv6, what address this server's packets come from. It
+// sends again while no answer comes, as UDP may lose one.
+func askStun(network, server string) net.IP {
+	to, err := net.ResolveUDPAddr(network, server)
+	if err != nil {
+		return nil
+	}
+	conn, err := net.ListenPacket(network, ":0")
 	if err != nil {
 		return nil
 	}
 	defer conn.Close()
-	client, err := turn.NewClient(&turn.ClientConfig{STUNServerAddr: server, Conn: conn, LoggerFactory: quiet{}, RTO: 300 * time.Millisecond})
+	request, err := stun.Build(stun.TransactionID, stun.BindingRequest, stun.Fingerprint)
 	if err != nil {
 		return nil
 	}
-	defer client.Close()
-	if err := client.Listen(); err != nil {
-		return nil
-	}
-	found := make(chan net.Addr, 1)
-	go func() {
-		addr, err := client.SendBindingRequest()
-		if err == nil {
-			found <- addr
+	deadline := time.Now().Add(stunDeadline)
+	buf := make([]byte, 1500)
+	for time.Now().Before(deadline) {
+		if _, err := conn.WriteTo(request.Raw, to); err != nil {
+			return nil
 		}
-	}()
-	select {
-	case addr := <-found:
-		if a, ok := addr.(*net.UDPAddr); ok {
-			return a.IP
+		wait := time.Now().Add(stunDeadline / 6)
+		if wait.After(deadline) {
+			wait = deadline
 		}
-	case <-time.After(3 * time.Second):
+		conn.SetReadDeadline(wait)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				break
+			}
+			if err != nil {
+				return nil
+			}
+			if a, ok := from.(*net.UDPAddr); !ok || !a.IP.Equal(to.IP) || a.Port != to.Port {
+				continue
+			}
+			answer := &stun.Message{Raw: append([]byte(nil), buf[:n]...)}
+			if answer.Decode() != nil || answer.Type != stun.BindingSuccess || answer.TransactionID != request.TransactionID {
+				continue
+			}
+			var mapped stun.XORMappedAddress
+			if mapped.GetFrom(answer) == nil {
+				return mapped.IP
+			}
+			var plain stun.MappedAddress
+			if plain.GetFrom(answer) == nil {
+				return plain.IP
+			}
+		}
 	}
 	return nil
 }
