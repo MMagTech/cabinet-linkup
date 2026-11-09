@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -596,6 +598,54 @@ func TestSignOutAndWrongPasswords(t *testing.T) {
 	rec := r.post("/signin", "password", "correct horse")
 	if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), "Too many tries") {
 		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Each try is counted before its slow hash. Counted after, every try sent at once passes the count
+// while the hash makes it wait, and a browser could check as many as it liked.
+func TestManySigninsAtOnceStillCount(t *testing.T) {
+	r := newRig(t)
+	r.setUp()
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	r.app.sessions.nowFn = func() time.Time { return now }
+	signin := func(password string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "http://192.168.1.10:8080/signin", strings.NewReader(url.Values{"password": {password}}.Encode()))
+		req.RemoteAddr = r.remote
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		r.h.ServeHTTP(rec, req)
+		return rec
+	}
+	var wg sync.WaitGroup
+	var checked, refused atomic.Int32
+	for range 4 * signinTries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch rec := signin("wrong guess"); {
+			case rec.Code == http.StatusTooManyRequests:
+				refused.Add(1)
+			case strings.Contains(rec.Body.String(), "Incorrect"):
+				checked.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if checked.Load() != signinTries || refused.Load() != 3*signinTries {
+		t.Fatalf("%d tries at once: %d checked and %d refused, want %d checked", 4*signinTries, checked.Load(), refused.Load(), signinTries)
+	}
+	if rec := signin("correct horse"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("the right password inside the minute got %d", rec.Code)
+	}
+	now = now.Add(signinWindow + time.Second)
+	for range 3 {
+		// A right password gives its try back, so the owner is never counted against.
+		if rec := signin("correct horse"); rec.Code != http.StatusSeeOther {
+			t.Fatalf("the right password after the minute got %d", rec.Code)
+		}
+	}
+	for range signinTries {
+		shows(t, signin("wrong"), "Incorrect")
 	}
 }
 

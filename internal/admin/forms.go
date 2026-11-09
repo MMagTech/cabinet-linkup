@@ -143,15 +143,16 @@ func (a *App) postSignin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/setup/password", http.StatusSeeOther)
 		return
 	}
-	if a.sessions.tooManyWrong() {
+	giveBack, ok := a.sessions.takeTry()
+	if !ok {
 		a.bare(w, http.StatusTooManyRequests, part{"signin", signinView{Error: "Too many tries"}})
 		return
 	}
 	if !checkPassword(stored, r.FormValue("password")) {
-		a.sessions.countWrong()
 		a.bare(w, http.StatusOK, part{"signin", signinView{Error: "Incorrect"}})
 		return
 	}
+	giveBack()
 	a.sessions.start(w)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -175,15 +176,16 @@ func (a *App) getPassword(w http.ResponseWriter, _ *http.Request, s *session) {
 }
 
 func (a *App) postPassword(w http.ResponseWriter, r *http.Request, s *session) {
-	if a.sessions.tooManyWrong() {
+	giveBack, ok := a.sessions.takeTry()
+	if !ok {
 		a.drawPassword(w, s, passwordView{ErrorCurrent: "Too many tries"})
 		return
 	}
 	if !checkPassword(a.Store.AdminHash(), r.FormValue("current")) {
-		a.sessions.countWrong()
 		a.drawPassword(w, s, passwordView{ErrorCurrent: "Incorrect"})
 		return
 	}
+	giveBack()
 	password := r.FormValue("password")
 	switch {
 	case len(password) < minPassword:
