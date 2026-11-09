@@ -10,6 +10,7 @@
   <Overview>The self-run server behind LinkUp on CabinetOS: friends, invites and an optional relay. Forward the console port on your router. Never forward the admin port.</Overview>
   <Category>GameServers: Network:Other</Category>
   <WebUI>http://[IP]:[PORT:7846]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/MMagTech/cabinet-linkup/main/unraid/icon.png</Icon>
   <ExtraParams>--user 99:100 --read-only --cap-drop=ALL --security-opt=no-new-privileges --log-opt max-size=1m --log-opt max-file=2</ExtraParams>
   <Config Name="Data" Target="/data" Default="/mnt/user/appdata/cabinet-linkup" Mode="rw" Description="Everything the server keeps. Back up this folder." Type="Path" Display="always" Required="true">/mnt/user/appdata/cabinet-linkup</Config>
   <Config Name="Console port" Target="7845" Default="7845" Mode="tcp" Description="Forward this one on your router." Type="Port" Display="always" Required="true">7845</Config>
