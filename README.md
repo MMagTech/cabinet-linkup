@@ -233,7 +233,8 @@ An older server refuses to start on a data folder from a newer one, rather than 
 ## Forgotten password
 
 Stop the container, delete `admin.json` from the data folder and start it. The next person to open the admin
-page sets a new password, so do that straight away. Nothing else is lost.
+page sets a new password, so do that straight away. Nothing else is lost. Only a missing `admin.json` does
+this: one that is damaged or cannot be read keeps the page locked until you delete it.
 
 ## Updating
 

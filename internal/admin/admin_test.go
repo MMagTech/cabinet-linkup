@@ -649,6 +649,21 @@ func TestManySigninsAtOnceStillCount(t *testing.T) {
 	}
 }
 
+// Only a missing admin.json opens first run. One the server cannot read keeps the page locked, so a
+// passing fault or a damaged file cannot hand the password to whoever asks next.
+func TestADamagedPasswordFileDoesNotReopenFirstRun(t *testing.T) {
+	r := newRig(t)
+	r.setUp()
+	if err := os.WriteFile(filepath.Join(r.store.Dir(), "admin.json"), []byte(`{"Hash": "$argon2id$v=19$m=65536`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.cookies = nil
+	goesTo(t, r.get("/status"), "/signin")
+	goesTo(t, r.post("/setup/password", "password", "the strangers", "again", "the strangers"), "/")
+	goesTo(t, r.get("/status"), "/signin")
+	shows(t, r.post("/signin", "password", "the strangers"), "Incorrect")
+}
+
 func TestForgottenPasswordIsDeletingTheFile(t *testing.T) {
 	r := newRig(t)
 	r.setUp()
