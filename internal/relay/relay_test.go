@@ -153,6 +153,11 @@ func (r *rig) client(t *testing.T, c Credentials) *turn.Client {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
+	return r.clientOn(t, conn, c)
+}
+
+func (r *rig) clientOn(t *testing.T, conn net.PacketConn, c Credentials) *turn.Client {
+	t.Helper()
 	client, err := turn.NewClient(&turn.ClientConfig{
 		STUNServerAddr: r.host, TURNServerAddr: r.host,
 		Username: c.Username, Password: c.Password, Realm: realm,
@@ -312,15 +317,35 @@ func TestEndedSessionStops(t *testing.T) {
 	if _, err := r.client(t, creds).Allocate(); err == nil {
 		t.Error("a session that ended must not open a connection")
 	}
-	r.s.mu.Lock()
-	stopped := false
-	for _, c := range r.s.conns {
-		stopped = stopped || c.stopped.Load()
+	waitFor(t, func() bool { return r.s.server.AllocationCount() == 0 })
+}
+
+// A console holds only a few ports, so its next game can come from the one its last game used.
+func TestEndedSessionFreesThePort(t *testing.T) {
+	r := newRig(t, true, 500)
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	r.s.mu.Unlock()
-	if !stopped {
-		t.Error("its traffic must stop at once")
+	address := conn.LocalAddr().String()
+	first, _ := r.s.Credentials("game1")
+	if _, err := r.clientOn(t, conn, first).Allocate(); err != nil {
+		t.Fatal(err)
 	}
+	r.s.EndSession("game1")
+	waitFor(t, func() bool { return r.s.server.AllocationCount() == 0 })
+	conn.Close()
+	again, err := net.ListenPacket("udp4", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	next, _ := r.s.Credentials("game2")
+	alloc, err := r.clientOn(t, again, next).Allocate()
+	if err != nil {
+		t.Fatalf("the next game from the same port was refused: %v", err)
+	}
+	defer alloc.Close()
 }
 
 func TestCountsAndLimit(t *testing.T) {

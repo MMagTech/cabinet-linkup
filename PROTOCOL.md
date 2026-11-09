@@ -414,9 +414,10 @@ host's is off.
 
 A `relay` password belongs to one session. A new connection can use it for 10 minutes after
 it is given out. A connection that has already started keeps working until the session
-ends, at most 24 hours. It is refused as soon as the server has seen the session end. A session
-can have 4 connections at once, however many passwords it asks for. The username holds a tag for the
-session, not its id.
+ends, at most 24 hours. It is refused as soon as the server has seen the session end, and the
+session's connections end then too, so the ports the consoles used are free for their next game. A
+session can have 4 connections at once, however many passwords it asks for. The username holds a tag
+for the session, not its id.
 
 It refuses to relay to private addresses: IPv4 and IPv6 loopback, private, link-local,
 unique-local, carrier-grade (100.64.0.0/10), multicast and unspecified addresses, IPv4 addresses
