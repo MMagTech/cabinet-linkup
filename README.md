@@ -68,6 +68,11 @@ before you, and a name like that is what it would use.
 | 7846/tcp | The admin page | **Never** |
 | 3478 to 3510/udp | The relay, and its games' ports after it | Only if the relay is on, and only as far as its Relay tab says |
 
+The admin page refuses a visitor it can see is outside your home, but Docker hides the address of one
+who arrives over IPv6: the page sees Docker's own. So [compose.yaml](compose.yaml) publishes it on IPv4
+only. If you start the container another way and the server has a public IPv6 address, keep 7846 closed
+to IPv6 on your router, as most routers do unless told otherwise.
+
 Any port outside the container can lead to the console port and the admin page. The relay's ports must
 be the same outside as inside, because the relay tells consoles its own port numbers. To move them, set
 `LINKUP_RELAY_PORT` and map the same range on both sides: `13478-13510:13478-13510/udp` for 13478.
