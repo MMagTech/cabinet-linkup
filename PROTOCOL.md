@@ -171,7 +171,9 @@ answer changes from 403 to 429, so a stranger cannot lock a real code out. A pri
 what a reverse proxy looks like, counts only in the total. A ceiling of 40,000 codes tried a second
 holds the work down, about a tenth of a core, so a server with 2 waiting codes needs 20,000 requests a
 second before anyone is refused. Someone sharing a public address with a guesser is refused too, for a
-minute. Failures are logged as counts only.
+minute. Failures are logged as counts only. At most 4096 public sources are counted at once; past that
+a new one counts only in the total, as a private source does, so a guesser with many addresses cannot
+make each failure cost the server more than the last.
 
 **Offline guessing.** Whoever captures message 1, or a fake server that receives
 it, can try guesses at leisure, at one Argon2id per guess, over about 2^57.7 codes.

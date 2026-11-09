@@ -31,6 +31,9 @@ const (
 	triesPerAddress = 5
 	triesInAll      = 30
 	triesWindow     = time.Minute
+	// Public sources whose failures are kept at once. Past this a new source counts only in the
+	// total, as a reverse proxy does, so a guesser with many addresses cannot grow the table.
+	triesSources = 4096
 	// Codes tried a second, past which nothing more is tried: about a tenth of a core.
 	triesCeiling = 40_000
 	// Requests a second one session can make. A real console makes a few.
@@ -99,6 +102,7 @@ type Handler struct {
 	confirmed map[string][proof.SessionIDSize]byte // the session in use per key
 	tries     map[string][]time.Time
 	allTries  []time.Time
+	swept     time.Time // when sources with no recent failure were last dropped
 	highestT  map[string]int64
 
 	ceilingSecond int64
@@ -173,7 +177,9 @@ func sourceKey(source string) string {
 
 // tooManyFailed notes one failed Pair and says whether its answer becomes 429. The limit only ever
 // changes that answer: a message that fits a code always goes through, so a stranger cannot lock a
-// real code out. Sources stay in memory only.
+// real code out. Sources stay in memory only. Each list keeps only the times its limit needs, and the
+// sources are swept once a window, so a failure costs the same however many came before it: this
+// runs under the lock every console's request takes.
 func (h *Handler) tooManyFailed(source string) bool {
 	key := sourceKey(source)
 	h.log.PairFailed()
@@ -181,16 +187,19 @@ func (h *Handler) tooManyFailed(source string) bool {
 	defer h.mu.Unlock()
 	now := h.now()
 	cutoff := now.Add(-triesWindow)
-	h.allTries = append(recent(h.allTries, cutoff), now)
-	for s, list := range h.tries {
-		if list = recent(list, cutoff); len(list) == 0 {
-			delete(h.tries, s)
-		} else {
-			h.tries[s] = list
+	h.allTries = newest(append(recent(h.allTries, cutoff), now), triesInAll+1)
+	if now.Sub(h.swept) >= triesWindow {
+		h.swept = now
+		for s, list := range h.tries {
+			if list = recent(list, cutoff); len(list) == 0 {
+				delete(h.tries, s)
+			} else {
+				h.tries[s] = list
+			}
 		}
 	}
-	if key != "" {
-		h.tries[key] = append(h.tries[key], now)
+	if _, known := h.tries[key]; key != "" && (known || len(h.tries) < triesSources) {
+		h.tries[key] = newest(append(recent(h.tries[key], cutoff), now), triesPerAddress+1)
 	}
 	return len(h.allTries) > triesInAll || (key != "" && len(h.tries[key]) > triesPerAddress)
 }
@@ -205,8 +214,18 @@ func recent(list []time.Time, cutoff time.Time) []time.Time {
 	return kept
 }
 
+// newest keeps the last n times of a list, in the list's own memory.
+func newest(list []time.Time, n int) []time.Time {
+	if len(list) <= n {
+		return list
+	}
+	copy(list, list[len(list)-n:])
+	return list[:n]
+}
+
 // overOwnLimit says whether a public source has already failed too often. It is refused before any
-// work, and does not count toward the ceiling, so one host cannot use the ceiling up for everyone.
+// work, and does not count toward the ceiling, so one host cannot use the ceiling up for everyone. A
+// source with no failures is not added to the table.
 func (h *Handler) overOwnLimit(source string) bool {
 	key := sourceKey(source)
 	if key == "" {
@@ -214,8 +233,13 @@ func (h *Handler) overOwnLimit(source string) bool {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.tries[key] = recent(h.tries[key], h.now().Add(-triesWindow))
-	return len(h.tries[key]) >= triesPerAddress
+	list, ok := h.tries[key]
+	if !ok {
+		return false
+	}
+	list = recent(list, h.now().Add(-triesWindow))
+	h.tries[key] = list
+	return len(list) >= triesPerAddress
 }
 
 // underCeiling holds the work of trying messages down, in codes tried, whatever else is happening.
