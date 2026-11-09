@@ -1,21 +1,80 @@
-# A version tag: build for amd64 and arm64, publish to ghcr.io and sign, so an owner can check
-# an image came from this repository. Nothing else publishes anything.
+# The only publishing. Every image is built for amd64 and arm64, published to ghcr.io and signed,
+# so an owner can check an image came from this repository.
+#
+# A version tag publishes the release, :<version> and :latest, which owners follow. Every push to
+# main publishes :testing once its Checks pass, for trying what is next before it is tagged.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_run:
+    workflows: [Checks]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 jobs:
+  # What to publish, if anything. Only the newest main becomes :testing, so a run that finishes
+  # late cannot take :testing back to an older commit.
+  plan:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.plan.outputs.commit }}
+      version: ${{ steps.plan.outputs.version }}
+      image: ${{ steps.plan.outputs.image }}
+      tags: ${{ steps.plan.outputs.tags }}
+      queue: ${{ steps.plan.outputs.queue }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          image="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            version="${GITHUB_REF_NAME#v}"
+            commit="$GITHUB_SHA"
+            tags="$image:$version,$image:latest"
+            queue="$version"
+          else
+            newest="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+            if [ "$newest" != "$TESTED" ]; then
+              echo "main has moved on since this commit, so its own run publishes :testing"
+              exit 0
+            fi
+            version="testing-${TESTED:0:7}"
+            commit="$TESTED"
+            tags="$image:testing"
+            queue=testing
+          fi
+          {
+            echo "commit=$commit"
+            echo "version=$version"
+            echo "image=$image"
+            echo "tags=$tags"
+            echo "queue=$queue"
+          } >> "$GITHUB_OUTPUT"
+
   publish:
+    needs: plan
+    if: needs.plan.outputs.commit != ''
+    # One :testing at a time and in order, so the newest is the one left standing.
+    concurrency: publish-${{ needs.plan.outputs.queue }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532  # v4.1.3
@@ -24,20 +83,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Work out the names
-        id: names
-        run: |
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: VERSION=${{ steps.names.outputs.version }}
-          tags: |
-            ${{ steps.names.outputs.image }}:${{ steps.names.outputs.version }}
-            ${{ steps.names.outputs.image }}:latest
+          build-args: VERSION=${{ needs.plan.outputs.version }}
+          tags: ${{ needs.plan.outputs.tags }}
       - name: Sign
-        run: cosign sign --yes "${{ steps.names.outputs.image }}@${{ steps.build.outputs.digest }}"
+        env:
+          IMAGE: ${{ needs.plan.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"

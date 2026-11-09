@@ -29,7 +29,9 @@ var (
 )
 
 // Format is the state file's format. A server refuses to start on a file from a
-// newer one, rather than overwrite what it cannot read.
+// newer one, rather than overwrite what it cannot read. Raise it only when an older
+// server would misread the file, never to add a field: going back from :testing to
+// :latest on the same folder works only while it stays the same (CONTRIBUTING.md).
 const Format = 1
 
 // DefaultStun is the STUN list on a new server, and what Reset brings back.
