@@ -1,3 +1,5 @@
+<p align="center"><img src="internal/admin/static/mark.svg" alt="" width="72"></p>
+
 # cabinet-linkup
 
 **LinkUp: "Player two, from anywhere."** The self-run server behind LinkUp on
@@ -10,6 +12,15 @@ way through. Games normally go straight between the two consoles and never touch
 
 **This is hobby software, and you run it at your own risk.** Nobody is paid to look after it and
 nobody can promise it has no holes. Keep it up to date, and read [What it holds](#what-it-holds).
+
+| | | |
+|---|---|---|
+| ![First run: the owner sets the password](docs/media/admin-first-run-phone.webp) | ![People: three people and an invite waiting](docs/media/admin-people-phone.webp) | ![Relay: the one line to forward on the router](docs/media/admin-relay-phone.webp) |
+
+![People on a computer, with one person's friends beside the list](docs/media/admin-people.webp)
+
+Playing happens on the console. The player's guide is
+[LinkUp on CabinetOS's wiki](https://cabinetos.mmagtech.com/wiki/linkup.html).
 
 ## What you need
 
