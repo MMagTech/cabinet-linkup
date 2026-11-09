@@ -12,8 +12,8 @@
   <WebUI>http://[IP]:[PORT:7846]/</WebUI>
   <Icon>https://raw.githubusercontent.com/MMagTech/cabinet-linkup/main/unraid/icon.png</Icon>
   <ExtraParams>--user 99:100 --read-only --cap-drop=ALL --security-opt=no-new-privileges --log-opt max-size=1m --log-opt max-file=2</ExtraParams>
-  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/cabinet-linkup" Mode="rw" Description="Everything the server keeps. Back up this folder." Type="Path" Display="always" Required="true">/mnt/user/appdata/cabinet-linkup</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/cabinet-linkup" Mode="rw" Description="Everything the server keeps. Back up this folder. Make it before the first start, owned by 99:100, or the server stops with &quot;the data folder cannot be written&quot;. In Unraid's terminal: mkdir -p /mnt/user/appdata/cabinet-linkup &amp;&amp; chown 99:100 /mnt/user/appdata/cabinet-linkup" Type="Path" Display="always" Required="true">/mnt/user/appdata/cabinet-linkup</Config>
   <Config Name="Console port" Target="7845" Default="7845" Mode="tcp" Description="Forward this one on your router." Type="Port" Display="always" Required="true">7845</Config>
   <Config Name="Admin port" Target="7846" Default="7846" Mode="tcp" Description="The admin page. Never forward this one." Type="Port" Display="always" Required="true">7846</Config>
-  <Config Name="Relay port" Target="3478" Default="3478" Mode="udp" Description="Forward only if you turn the relay on." Type="Port" Display="advanced" Required="false">3478</Config>
+  <Config Name="Relay ports" Target="3478-3510" Default="3478-3510" Mode="udp" Description="The relay, and its games' ports after it, for up to 16 games at once. Forward only if you turn the relay on, and only as far as its Relay tab says. Keep the same numbers on both sides: the relay tells consoles its own ports." Type="Port" Display="advanced" Required="false">3478-3510</Config>
 </Container>

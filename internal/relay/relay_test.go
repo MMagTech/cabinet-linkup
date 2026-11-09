@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/stun/v3"
 	"github.com/pion/turn/v4"
 
 	"github.com/MMagTech/cabinet-linkup/internal/logfile"
@@ -96,6 +97,35 @@ func freePort(t *testing.T) int {
 	return c.LocalAddr().(*net.UDPAddr).Port
 }
 
+// relayPort finds a relay port with every games' port after it free too, and one more past them.
+func relayPort(t *testing.T) int {
+	t.Helper()
+	for range 50 {
+		base := freePort(t)
+		if base+portsPerGame*MaxGames+1 > 65535 {
+			continue
+		}
+		var held []net.PacketConn
+		free := true
+		for p := base; p <= base+portsPerGame*MaxGames+1 && free; p++ {
+			c, err := net.ListenPacket("udp", ":"+strconv.Itoa(p))
+			if err != nil {
+				free = false
+				break
+			}
+			held = append(held, c)
+		}
+		for _, c := range held {
+			c.Close()
+		}
+		if free {
+			return base
+		}
+	}
+	t.Fatal("no run of free ports")
+	return 0
+}
+
 type rig struct {
 	s     *Service
 	store *store.Store
@@ -124,9 +154,8 @@ func newRig(t *testing.T, allowPrivate bool, limitGB int) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := freePort(t)
-	low := freePort(t)
-	s := New(Config{Port: port, PortMin: low, PortMax: low, AllowPrivate: allowPrivate, found: net.IPv4(127, 0, 0, 1)}, st, log)
+	port := relayPort(t)
+	s := New(Config{Port: port, AllowPrivate: allowPrivate, found: net.IPv4(127, 0, 0, 1)}, st, log)
 	s.Apply()
 	t.Cleanup(s.Close)
 	waitFor(t, func() bool { return s.Available() == "" })
@@ -219,7 +248,9 @@ func TestLowPortsAndTheOwnersOwnAddress(t *testing.T) {
 		{net.IPv4(8, 8, 8, 8), 50000, true},
 		{own, 8080, false},
 		{own, r.s.cfg.Port, true},
-		{own, r.s.cfg.PortMin, true},
+		{own, r.s.cfg.Port + 1, true},
+		{own, r.s.cfg.Port + portsPerGame*MaxGames, true},
+		{own, r.s.cfg.Port + portsPerGame*MaxGames + 1, false},
 	} {
 		if got := r.s.sendable(&net.UDPAddr{IP: c.ip, Port: c.port}); got != c.ok {
 			t.Errorf("%v:%d = %v", c.ip, c.port, got)
@@ -246,7 +277,6 @@ func TestPeersPerConnection(t *testing.T) {
 // A session cannot get more connections by asking for more passwords.
 func TestConnectionsCountPerSessionNotPerPassword(t *testing.T) {
 	r := newRig(t, true, 500)
-	r.s.cfg.PortMax = r.s.cfg.PortMin + 20
 	for i := 0; i <= connectionsPerSession+1; i++ {
 		creds, _ := r.s.Credentials("game1")
 		name := creds.Username
@@ -515,5 +545,223 @@ func TestLogHoldsNoAddresses(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(r.dir, "log.txt"))
 	if strings.Contains(string(data), "127.0.0.1") {
 		t.Error(string(data))
+	}
+}
+
+func TestGamesAtOnceAndWhatToForward(t *testing.T) {
+	for chosen, want := range map[int]int{0: DefaultGames, -3: DefaultGames, 1: 1, 4: 4, MaxGames: MaxGames, 99: MaxGames} {
+		if got := GamesAtOnce(chosen); got != want {
+			t.Errorf("GamesAtOnce(%d) = %d, want %d", chosen, got, want)
+		}
+	}
+	for games, last := range map[int]int{0: 3482, 2: 3482, 4: 3486, 16: 3510, 40: 3510} {
+		if first, got := Forward(3478, games); first != 3478 || got != last {
+			t.Errorf("Forward(3478, %d) = %d to %d, want 3478 to %d", games, first, got, last)
+		}
+	}
+}
+
+// Each relayed game takes its ports right after the relay's own, as many as the owner's number allows,
+// and a port past that number is never opened. A higher number lets the next game in at once.
+func TestGamesOnlyOnTheirPorts(t *testing.T) {
+	r := newRig(t, true, 500)
+	port := r.s.cfg.Port
+	inRange := func(alloc net.PacketConn, games int) {
+		t.Helper()
+		got := alloc.LocalAddr().(*net.UDPAddr).Port
+		if got <= port || got > port+portsPerGame*games {
+			t.Errorf("relayed on %d, outside %d to %d", got, port+1, port+portsPerGame*games)
+		}
+	}
+	for i := range portsPerGame * DefaultGames {
+		creds, _ := r.s.Credentials("game" + strconv.Itoa(i/portsPerGame))
+		alloc, err := r.client(t, creds).Allocate()
+		if err != nil {
+			t.Fatalf("connection %d: %v", i, err)
+		}
+		t.Cleanup(func() { alloc.Close() })
+		inRange(alloc, DefaultGames)
+	}
+	past, _ := r.s.Credentials("game-past")
+	if alloc, err := r.client(t, past).Allocate(); err == nil {
+		alloc.Close()
+		t.Fatal("a connection past the owner's number of games")
+	}
+	for p := port + portsPerGame*DefaultGames + 1; p <= port+portsPerGame*MaxGames; p++ {
+		c, err := net.ListenPacket("udp", ":"+strconv.Itoa(p))
+		if err != nil {
+			t.Errorf("port %d is open past the owner's number", p)
+			continue
+		}
+		c.Close()
+	}
+	r.store.Update(func(st *store.State) error { st.Settings.RelayGames = 3; return nil })
+	alloc, err := r.client(t, past).Allocate()
+	if err != nil {
+		t.Fatalf("a third game once the owner allows three: %v", err)
+	}
+	defer alloc.Close()
+	inRange(alloc, 3)
+	if s := r.s.Status(); s.GamesAtOnce != 3 || s.FirstPort != port || s.LastPort != port+6 {
+		t.Errorf("the page would say %+v", s)
+	}
+}
+
+// A relayed game on the games' ports: each console has its own connection, and packets go both ways
+// between the two, counted.
+func TestRelayedGameOnTheGamesPorts(t *testing.T) {
+	r := newRig(t, true, 500)
+	host, _ := r.s.Credentials("game1")
+	friend, _ := r.s.Credentials("game1")
+	a, err := r.client(t, host).Allocate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := r.client(t, friend).Allocate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	for _, alloc := range []net.PacketConn{a, b} {
+		p := alloc.LocalAddr().(*net.UDPAddr).Port
+		if p <= r.s.cfg.Port || p > r.s.cfg.Port+portsPerGame*DefaultGames {
+			t.Errorf("relayed on %d", p)
+		}
+	}
+	// A connection takes packets only from a peer it has written to, which gives it a permission, so
+	// each console knocks first, as ICE's checks do.
+	for _, knock := range [][2]net.PacketConn{{a, b}, {b, a}} {
+		if _, err := knock[0].WriteTo([]byte("knock"), knock[1].LocalAddr()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exchange := func(from, to net.PacketConn, payload string) {
+		t.Helper()
+		buf := make([]byte, 1500)
+		for range 20 {
+			if _, err := from.WriteTo([]byte(payload), to.LocalAddr()); err != nil {
+				t.Fatal(err)
+			}
+			to.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			n, addr, err := to.ReadFrom(buf)
+			if err == nil && string(buf[:n]) == payload {
+				if addr.String() != from.LocalAddr().String() {
+					t.Errorf("came from %v, want %v", addr, from.LocalAddr())
+				}
+				return
+			}
+		}
+		t.Fatalf("%q never arrived", payload)
+	}
+	exchange(b, a, "hello")
+	exchange(a, b, "picture")
+	exchange(b, a, "buttons")
+	if r.s.Status().UsedBytes == 0 {
+		t.Error("a relayed game is counted")
+	}
+}
+
+// fakeStun answers binding requests as a STUN server does, saying the asker's packets come from report.
+func fakeStun(t *testing.T, network, listen string, report net.IP) string {
+	t.Helper()
+	conn, err := net.ListenPacket(network, listen)
+	if err != nil {
+		t.Skipf("no %s here: %v", network, err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			request := &stun.Message{Raw: append([]byte(nil), buf[:n]...)}
+			if request.Decode() != nil || request.Type != stun.BindingRequest {
+				continue
+			}
+			answer, err := stun.Build(stun.NewTransactionIDSetter(request.TransactionID), stun.BindingSuccess,
+				&stun.XORMappedAddress{IP: report, Port: 40000}, stun.Fingerprint)
+			if err == nil {
+				conn.WriteTo(answer.Raw, from)
+			}
+		}
+	}()
+	return conn.LocalAddr().String()
+}
+
+// addressRig is a relay that has to find its own address, from a public address and a STUN list.
+func addressRig(t *testing.T, allowPrivate bool, public string, stunList ...string) *Service {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.Open(dir, func(state *store.State) error {
+		state.RelaySecret = []byte("0123456789abcdef0123456789abcdef")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Update(func(state *store.State) error {
+		state.Settings.Address = public
+		state.Settings.Stun = nil
+		for i, a := range stunList {
+			state.Settings.Stun = append(state.Settings.Stun, store.Stun{ID: strconv.Itoa(i), Address: a})
+		}
+		return nil
+	})
+	log, err := logfile.Open(filepath.Join(dir, "log.txt"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(Config{Port: 3478, AllowPrivate: allowPrivate}, st, log)
+}
+
+// Behind a reverse proxy or Cloudflare, the public address leads to the proxy. The relay hands out
+// where STUN sees its own packets come from instead, whatever the public address says.
+func TestAddressIsWhereStunSeesThePackets(t *testing.T) {
+	behindProxy := fakeStun(t, "udp4", "127.0.0.1:0", net.IPv4(8, 8, 4, 4))
+	for _, public := range []string{"1.1.1.1:443", "https://1.1.1.1", "8.8.8.8:7845", ""} {
+		s := addressRig(t, false, public, behindProxy)
+		s.findAddress()
+		if got := s.Status().Found; got != "8.8.4.4:3478" {
+			t.Errorf("public address %q: relay at %q, want where STUN sees it", public, got)
+		}
+	}
+}
+
+// With no STUN answer there is no address, and the relay says it is off, rather than hand out
+// whatever the public address leads to.
+func TestNoStunAnswerIsNoAddress(t *testing.T) {
+	private := fakeStun(t, "udp4", "127.0.0.1:0", net.IPv4(192, 168, 1, 50))
+	s := addressRig(t, false, "1.1.1.1:443", "127.0.0.1:"+strconv.Itoa(freePort(t)), private)
+	s.findAddress()
+	if got := s.Status().Found; got != "" {
+		t.Errorf("relay at %q with nothing public from STUN", got)
+	}
+	data, _ := os.ReadFile(filepath.Join(s.store.Dir(), "log.txt"))
+	if !strings.Contains(string(data), "relay") {
+		t.Errorf("the log says nothing: %s", data)
+	}
+}
+
+// A server with no IPv4 asks over IPv6.
+func TestAddressOverIPv6(t *testing.T) {
+	v6 := fakeStun(t, "udp6", "[::1]:0", net.ParseIP("2606:4700:4700::1111"))
+	s := addressRig(t, false, "", v6)
+	s.findAddress()
+	if got := s.Status().Found; got != "[2606:4700:4700::1111]:3478" {
+		t.Errorf("relay at %q", got)
+	}
+}
+
+// A test server for consoles on one home network keeps its public address's own name: there it is
+// the address those consoles reach.
+func TestTestServerTakesItsPublicAddress(t *testing.T) {
+	outside := fakeStun(t, "udp4", "127.0.0.1:0", net.IPv4(8, 8, 4, 4))
+	s := addressRig(t, true, "127.0.0.1:7845", outside)
+	s.findAddress()
+	if got := s.Status().Found; got != "127.0.0.1:3478" {
+		t.Errorf("relay at %q", got)
 	}
 }

@@ -39,8 +39,16 @@ Then open `http://localhost:7846` on your own machine. Tailscale on the VPS work
 reach the page from a phone. It is the one way of reaching it from outside that the page allows,
 because it counts 100.64.0.0/10 as not public.
 
-**On Unraid:** add [unraid/cabinet-linkup.xml](unraid/cabinet-linkup.xml) as a template on the Docker
-page, and fill in the fields.
+**On Unraid:** make the data folder first, owned by the user Unraid runs containers as, or the server
+stops with "the data folder cannot be written". Then fetch the template,
+[unraid/cabinet-linkup.xml](unraid/cabinet-linkup.xml). Both in Unraid's terminal:
+
+```bash
+mkdir -p /mnt/user/appdata/cabinet-linkup && chown 99:100 /mnt/user/appdata/cabinet-linkup
+curl -fsSL -o /boot/config/plugins/dockerMan/templates-user/my-cabinet-linkup.xml https://raw.githubusercontent.com/MMagTech/cabinet-linkup/main/unraid/cabinet-linkup.xml
+```
+
+Then on the Docker page: Add Container, Template, cabinet-linkup, and fill in the fields.
 
 **Rootless Podman:** use `--network=host` and set the ports with the variables below. A rootless
 container's own network hides visitors' addresses, which the relay needs, and hides other containers on
@@ -55,8 +63,11 @@ so do that as soon as it is running.
 |---|---|---|
 | 7845/tcp | Consoles and linked servers | Yes |
 | 7846/tcp | The admin page | **Never** |
-| 3478/udp | The relay | Only if the relay is on |
-| 49160 to 49200/udp | The relay's games | Only if the relay is on |
+| 3478 to 3510/udp | The relay, and its games' ports after it | Only if the relay is on, and only as far as its Relay tab says |
+
+Any port outside the container can lead to the console port and the admin page. The relay's ports must
+be the same outside as inside, because the relay tells consoles its own port numbers. To move them, set
+`LINKUP_RELAY_PORT` and map the same range on both sides: `13478-13510:13478-13510/udp` for 13478.
 
 ## First run
 
@@ -88,8 +99,13 @@ hear of a new public address on their own.
 
 A reverse proxy covers the console port only. It adds nothing to the protocol's safety, and needs no
 trusted certificate: every message is already sealed. The relay's UDP ports are always forwarded
-separately. Never put the admin page behind a proxy that faces the internet; the page refuses a
-visitor it can see is outside, but a proxy can hide that.
+separately, and the relay finds its own address without asking the proxy. Never put the admin page
+behind a proxy that faces the internet; the page refuses a visitor it can see is outside, but a proxy
+can hide that.
+
+With Traefik's Docker provider, tell it which port, because the container offers two: the label
+`traefik.http.services.cabinet-linkup.loadbalancer.server.port=7845`. 7846 is the admin page and is
+never routed.
 
 Nothing is built or promised for any VPN, and none of it has been tried. Any network works if the two
 consoles can reach each other. A VPN asks every friend for an account and setup, where everything
@@ -137,6 +153,16 @@ buy and no account anywhere. It is off until you turn it on.
 8.1 GB an hour. Most games go direct and cost you nothing. On a home connection, two relayed games at once
 may be all your upload can carry.
 
+**Games at once,** on the Relay tab, is how many relayed games can run at the same time: 2 at first, up
+to 16. Each takes up to two ports, one for each console, right after 3478, so the tab gives the one line
+to forward on your router: "Forward UDP 3478 to 3482 on your router" for two. The container maps the ports
+for 16, so raising the number needs no new container, only a wider forward. The relay never opens a port
+past your number, and opens one only while a game is using it.
+
+**Its address** is where the STUN list sees the server's packets come from, the way a console finds its
+own. A reverse proxy, or a service like Cloudflare in front of one, does not change that, so your public
+address can be a name that leads to one.
+
 **The monthly limit** counts data through the relay. At the limit the relay stops until the day you set
 as its reset day (a day past the end of a month means its last day), and direct games keep working. A VPS
 is billed on its own day, so set that. The limit does not slow anything down before then. It is your only
@@ -151,7 +177,7 @@ on. That is the only place paying for anything comes in, and it is your choice. 
 does not help: STUN only tells a console its outside address, and carries nothing.
 
 **Test** tries your address from inside the server, as a console would. It can fail wrongly if your router
-cannot loop back to itself, and it checks only 3478/udp, not the games' port range. A friend's game is the
+cannot loop back to itself, and it checks only 3478/udp, not the games' ports. A friend's game is the
 final answer.
 
 The relay refuses to send to private addresses, so it cannot be used to reach into your home network. A
@@ -237,8 +263,9 @@ Most owners change none of these.
 | `LINKUP_DATA` | `/data` | The data folder |
 | `LINKUP_CONSOLE_PORT` | `7845` | The console port |
 | `LINKUP_ADMIN_PORT` | `7846` | The admin page's port |
-| `LINKUP_RELAY_PORT` | `3478` | The relay's port |
-| `LINKUP_RELAY_PORTS` | `49160-49200` | The relay's games. Each relayed game needs one or two |
+| `LINKUP_RELAY_PORT` | `3478` | The relay's port. Its games use the 32 ports right after it |
+
+0.1.0's `LINKUP_RELAY_PORTS` is no longer read: the games' ports follow the relay's own.
 
 ## For developers
 

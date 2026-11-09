@@ -9,9 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 
+	"github.com/MMagTech/cabinet-linkup/internal/relay"
 	"github.com/MMagTech/cabinet-linkup/internal/server"
 )
 
@@ -38,9 +38,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	low, high, err := portRange(os.Getenv("LINKUP_RELAY_PORTS"), 49160, 49200)
-	if err != nil {
-		return err
+	if _, last := relay.Forward(relayPort, relay.MaxGames); last > 65535 {
+		return fmt.Errorf("LINKUP_RELAY_PORT leaves no room for the games' ports after it: %d", relayPort)
+	}
+	// 0.1.0 took the games' ports from here. They follow the relay's own port now, so the owner forwards
+	// one range, and the admin page's Relay tab says which.
+	if os.Getenv("LINKUP_RELAY_PORTS") != "" {
+		fmt.Fprintln(os.Stderr, "LINKUP_RELAY_PORTS is no longer read: the relay's games use the ports right after LINKUP_RELAY_PORT")
 	}
 	data := os.Getenv("LINKUP_DATA")
 	if data == "" {
@@ -52,8 +56,6 @@ func run() error {
 		ConsoleAddr:  net.JoinHostPort("", strconv.Itoa(consolePort)),
 		AdminAddr:    net.JoinHostPort("", strconv.Itoa(adminPort)),
 		RelayPort:    relayPort,
-		RelayMin:     low,
-		RelayMax:     high,
 		RelayPrivate: private,
 		Version:      version,
 		Out:          os.Stdout,
@@ -66,26 +68,4 @@ func run() error {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	return s.Stop()
-}
-
-func portRange(text string, low, high int) (int, int, error) {
-	if text == "" {
-		return low, high, nil
-	}
-	a, b, ok := strings.Cut(text, "-")
-	if !ok {
-		return 0, 0, fmt.Errorf("not a range of ports: %s", text)
-	}
-	first, err := server.Port(a, 0)
-	if err != nil {
-		return 0, 0, err
-	}
-	last, err := server.Port(b, 0)
-	if err != nil {
-		return 0, 0, err
-	}
-	if first > last {
-		return 0, 0, fmt.Errorf("not a range of ports: %s", text)
-	}
-	return first, last, nil
 }

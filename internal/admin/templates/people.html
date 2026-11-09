@@ -1,5 +1,6 @@
 {{/* People: everyone on this server, by their login with the owner's note under it
-     if there is one, then the invites waiting, under them so they move nothing. A note belongs to one person: whoever
+     if there is one, then the invites waiting, under them so they move nothing. A login
+     that two people share, one account on two consoles, has its console under it too. A note belongs to one person: whoever
      used the invite, or anyone the owner gives one to on their page. Choosing someone
      opens them: beside the list on a computer, in place of it on a phone. */}}
 
@@ -14,14 +15,14 @@
   {{if .Selected}}<div class="detail">{{template "person" .Selected}}</div>{{end}}
 </div>{{end}}
 
-{{define "person-row"}}<a class="item" href="/people?person={{.ID}}"{{if .Current}} aria-current="true"{{end}}>{{template "avatar" .}}<span class="item-text"><span class="item-name">{{.Name}}</span>{{if .Note}}<span class="item-sub">{{.Note}}</span>{{end}}</span>{{template "status" .}}{{template "icon-next"}}</a>{{end}}
+{{define "person-row"}}<a class="item" href="/people?person={{.ID}}"{{if .Current}} aria-current="true"{{end}}>{{template "avatar" .}}<span class="item-text"><span class="item-name">{{.Name}}</span>{{if or .Console .Note}}<span class="item-sub">{{.Console}}{{if and .Console .Note}} · {{end}}{{.Note}}</span>{{end}}</span>{{template "status" .}}{{template "icon-next"}}</a>{{end}}
 
 {{define "person"}}<a class="detail-back" href="/people">{{template "icon-back"}}People</a>
 <a class="detail-close" href="/people" aria-label="Close">{{template "icon-close"}}</a>
-<div class="person-head">{{template "avatar" .}}<div><h2 class="detail-title">{{.Name}}</h2><p class="sub">{{if .Online}}<span class="dot-on"></span>Online{{else}}Last seen {{template "when-day" .LastSeen}}{{end}}</p></div></div>
+<div class="person-head">{{template "avatar" .}}<div><h2 class="detail-title">{{.Name}}</h2><p class="sub">{{if .Online}}<span class="dot-on"></span>Online{{else}}Last seen {{template "when-day" .LastSeen}}{{end}}{{if .Console}} · {{.Console}}{{end}}</p></div></div>
 <h2 class="label">Friends</h2>
 <div class="card">
-  {{range .Friends}}<div class="item">{{template "avatar" .}}<div class="item-text"><div class="item-name">{{.Name}}</div>{{if .Server}}<div class="item-sub">{{.Server}}</div>{{end}}</div><form method="post" action="/friends/remove"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="person" value="{{$.ID}}"><button class="icon-button" aria-label="Remove {{.Name}}">{{template "icon-close"}}</button></form></div>{{else}}<div class="item"><span class="sub">No friends</span></div>{{end}}
+  {{range .Friends}}<div class="item">{{template "avatar" .}}<div class="item-text"><div class="item-name">{{.Name}}</div>{{if .Server}}<div class="item-sub">{{.Server}}</div>{{end}}{{if .Console}}<div class="item-sub">{{.Console}}</div>{{end}}</div><form method="post" action="/friends/remove"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="person" value="{{$.ID}}"><button class="icon-button" aria-label="Remove {{.Name}}">{{template "icon-close"}}</button></form></div>{{else}}<div class="item"><span class="sub">No friends</span></div>{{end}}
   <form method="post" action="/friends/add" class="item add-line"><input type="hidden" name="person" value="{{.ID}}"><select name="friend" aria-label="Add a friend"><option value="">Add a friend</option>{{range .CanAdd}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><button class="btn small">Add</button></form>
 </div>
 <h2 class="label">Note</h2>

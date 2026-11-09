@@ -27,7 +27,7 @@
 <h2 class="label">Friends</h2>
 <div class="card">
   <div class="item pair pair-head"><span>This server</span><span>{{.Name}}</span></div>
-  {{range .Pairs}}<div class="item pair"><span class="item-name">{{.Ours}}</span><span class="item-name">{{.Theirs}}</span><form method="post" action="/links/pairs/remove"><input type="hidden" name="pair" value="{{.ID}}"><button class="icon-button" aria-label="Remove {{.Ours}} and {{.Theirs}}">{{template "icon-close"}}</button></form></div>{{end}}
+  {{range .Pairs}}<div class="item pair"><span class="item-text"><span class="item-name">{{.Ours}}</span>{{if .OursConsole}}<span class="item-sub">{{.OursConsole}}</span>{{end}}</span><span class="item-name">{{.Theirs}}</span><form method="post" action="/links/pairs/remove"><input type="hidden" name="pair" value="{{.ID}}"><button class="icon-button" aria-label="Remove {{.Ours}} and {{.Theirs}}">{{template "icon-close"}}</button></form></div>{{end}}
   <a class="item" href="/links/make"><span class="row-icon">{{template "icon-plus"}}</span><span class="item-text"><span class="item-name">Add friends</span></span>{{template "icon-next"}}</a>
 </div>
 <div class="card foot-rows">

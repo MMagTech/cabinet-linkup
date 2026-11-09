@@ -51,10 +51,9 @@ type box struct {
 func startServer(t *testing.T, name string) *box {
 	t.Helper()
 	dir := t.TempDir()
-	low := udpPort(t)
 	s, err := New(Config{
 		Data: dir, ConsoleAddr: "127.0.0.1:0", AdminAddr: "127.0.0.1:0",
-		RelayPort: udpPort(t), RelayMin: low, RelayMax: low, RelayPrivate: true, Version: "1.0.0",
+		RelayPort: udpPort(t), RelayPrivate: true, Version: "1.0.0",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -769,7 +768,7 @@ func TestStunListComesFromTheServer(t *testing.T) {
 
 func TestDataSurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
-	cfg := Config{Data: dir, ConsoleAddr: "127.0.0.1:0", AdminAddr: "127.0.0.1:0", RelayPort: udpPort(t), RelayMin: 40000, RelayMax: 40001, Version: "1"}
+	cfg := Config{Data: dir, ConsoleAddr: "127.0.0.1:0", AdminAddr: "127.0.0.1:0", RelayPort: udpPort(t), Version: "1"}
 	s, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)

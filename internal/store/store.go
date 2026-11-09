@@ -139,6 +139,7 @@ type Settings struct {
 	Relay         bool
 	RelayLimitGB  int
 	RelayResetDay int
+	RelayGames    int // relayed games at once; none yet means the relay's default
 }
 
 // Setup is how far first run has got, so that someone who walks away resumes at the

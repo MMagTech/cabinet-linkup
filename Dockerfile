@@ -16,5 +16,5 @@ COPY --from=build /out/cabinet-linkup /cabinet-linkup
 COPY --from=build --chown=65532:65532 /out/data /data
 USER 65532:65532
 VOLUME /data
-EXPOSE 7845/tcp 7846/tcp 3478/udp 49160-49200/udp
+EXPOSE 7845/tcp 7846/tcp 3478-3510/udp
 ENTRYPOINT ["/cabinet-linkup"]

@@ -11,6 +11,11 @@
 {{/* What is wrong with a field, on its label's line. No new line, so nothing moves. */}}
 {{define "field-error"}}{{if .}}<span class="field-error" role="alert">{{.}}</span>{{end}}{{end}}
 
+{{/* How many relayed games at once, and the one range of ports the owner forwards for
+     them, which admin.js keeps up with the number as it is typed. */}}
+{{define "games-at-once"}}<label>Games at once<input type="number" name="games" value="{{.GamesAtOnce}}" min="1" max="{{.MaxGames}}" inputmode="numeric" data-games="{{.FirstPort}}"></label>
+    <p class="sub">Forward UDP {{.FirstPort}} to <span data-last>{{.LastPort}}</span> on your router</p>{{end}}
+
 {{/* The letter disc the console draws for a person with no picture. */}}
 {{define "avatar"}}<span class="avatar t{{.Tint}}" aria-hidden="true">{{.Letter}}</span>{{end}}
 
