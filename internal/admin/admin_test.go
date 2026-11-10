@@ -321,12 +321,24 @@ func TestEmptyServerDraws(t *testing.T) {
 		"/people/add":   {"Invite a friend"},
 		"/relay":        {"Off"},
 		"/links":        {"Create code"},
+		"/links/make":   {"Create link code", "Nobody's on this server yet. Invite someone first."},
+		"/links/enter":  {"Enter link code", "Nobody's on this server yet. Invite someone first."},
 		"/server/log":   {"No entries"},
 	} {
 		t.Run(path, func(t *testing.T) { shows(t, r.get(path), words...) })
 	}
 	if strings.Contains(r.get("/people/add").Body.String(), "Friend of") {
 		t.Error("Friend of only when someone is there to pick")
+	}
+	for _, path := range []string{"/links/make", "/links/enter"} {
+		if strings.Contains(r.get(path).Body.String(), `action="`+path+`"`) {
+			t.Errorf("%s: no form while there is nobody to link", path)
+		}
+	}
+	goesTo(t, r.post("/links/make", "for", ""), "/links/make")
+	shows(t, r.post("/links/enter", "address", "x:1", "code", "GOOD"), "Nobody's on this server yet. Invite someone first.")
+	if len(r.links.entered) != 0 {
+		t.Error("nothing is sent to the other server without an account to link")
 	}
 	if strings.Contains(r.get("/relay").Body.String(), "Used this month") {
 		t.Error("off shows only the switch")
@@ -341,6 +353,12 @@ func TestLinkProblemsDraw(t *testing.T) {
 	shows(t, r.get("/status"), "Can&#39;t reach Riley&#39;s")
 	shows(t, r.get("/links"), "Can't reach")
 	shows(t, r.get("/links?server=l1"), "Can't reach since", "2026-11-01")
+	r.store.Update(func(st *store.State) error { st.Links[0].Failing = time.Time{}; return nil })
+	body := r.get("/links?server=l1")
+	shows(t, body, "Not reached yet")
+	if strings.Contains(body.Body.String(), "Can't reach since") {
+		t.Error("a link never reached has no since")
+	}
 	r.links.state = LinkState{Reachable: true, BehindTheirs: true}
 	shows(t, r.get("/status"), "Riley&#39;s needs an update")
 	shows(t, r.get("/links"), "Needs update")
@@ -494,6 +512,10 @@ func TestEnteringALinkCode(t *testing.T) {
 	r.setUp()
 	r.fill()
 	shows(t, r.post("/links/enter", "address", "", "code", ""), "Required")
+	shows(t, r.post("/links/enter", "address", "x:1", "code", "GOOD", "for", "nobody"), "Required", `value="GOOD"`)
+	if len(r.links.entered) != 0 {
+		t.Error("an account that is not here is not a wrong code, and nothing is sent")
+	}
 	r.links.enter = store.ErrWrongCode
 	shows(t, r.post("/links/enter", "address", "x:1", "code", "BAD", "for", "a1"), "Wrong or expired", `value="x:1"`, `value="BAD"`)
 	r.links.enter = store.ErrCantReach

@@ -88,6 +88,9 @@ type peer struct {
 	done   chan struct{}
 	misses int
 	state  State
+	// heard is what that server last said of its people. It shows only while this server reaches
+	// theirs, since a knock goes from here to there.
+	heard map[string]string
 }
 
 // Manager holds the links, and speaks for this server to the others.
@@ -156,7 +159,7 @@ func (m *Manager) State(id string) State {
 	var failing bool
 	m.store.View(func(st *store.State) {
 		if l := st.Link(id); l != nil {
-			failing = !l.Failing.IsZero()
+			failing = !l.Failing.IsZero() || l.Address == ""
 		}
 	})
 	return State{Reachable: !failing}
@@ -350,6 +353,7 @@ func (m *Manager) noteResult(id string, p *peer, err error) {
 	}
 	behind := p.state.BehindTheirs || p.state.BehindOurs
 	reachable := p.state.Reachable
+	heard := p.heard
 	m.mu.Unlock()
 
 	number := 0
@@ -373,8 +377,11 @@ func (m *Manager) noteResult(id string, p *peer, err error) {
 	if changedUp {
 		m.log.LinkUp(number)
 	}
-	if !reachable {
+	switch {
+	case !reachable:
 		m.hub.RemoteStatus(id, behind, nil)
+	case changedUp:
+		m.hub.RemoteStatus(id, behind, heard)
 	}
 }
 
@@ -728,6 +735,7 @@ func (m *Manager) heard(id string, h ourHello) {
 	statuses := map[string]string{}
 	var touched []string
 	var dropped []store.Pair
+	var current store.Link
 	now := time.Now()
 	// Saved only if something saved changed: status lives in memory, and this comes every minute.
 	err := m.store.Change(func(st *store.State) bool {
@@ -774,18 +782,26 @@ func (m *Manager) heard(id string, h ourHello) {
 			}
 		}
 		l.Pairs = kept
+		current = *l
 		return changed
 	})
 	if err != nil {
 		m.log.Problem(logfile.ProblemSave)
 	}
+	if current.ID == "" {
+		return
+	}
 	for _, pair := range dropped {
 		m.hub.EndPair(id, pair.Ours, pair.Theirs)
 	}
-	var behind bool
+	// Their server reaching this one says nothing of this one reaching theirs, and a knock goes that
+	// way: until it does, their people are Offline here (PROTOCOL.md, "Operations").
+	p := m.peerFor(current)
 	m.mu.Lock()
-	if p := m.peers[id]; p != nil {
-		behind = p.state.BehindTheirs || p.state.BehindOurs
+	behind := p.state.BehindTheirs || p.state.BehindOurs
+	p.heard = statuses
+	if !p.state.Reachable {
+		statuses = nil
 	}
 	m.mu.Unlock()
 	m.hub.RemoteStatus(id, behind, statuses)

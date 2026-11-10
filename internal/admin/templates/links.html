@@ -23,7 +23,7 @@
 <a class="detail-close" href="/links" aria-label="Close">{{template "icon-close"}}</a>
 <h2 class="detail-title">{{.Name}}</h2>
 <p class="sub address">{{.Address}}</p>
-{{if .BehindTheirs}}<p class="sub line-bad">{{.Name}} needs an update</p>{{else}}{{if .BehindOurs}}<p class="sub line-bad">This server needs an update</p>{{else}}{{if .Reachable}}<p class="sub"><span class="dot-on"></span>Connected</p>{{else}}<p class="sub line-bad">Can't reach since {{template "when-day" .Since}}</p>{{end}}{{end}}{{end}}
+{{if .BehindTheirs}}<p class="sub line-bad">{{.Name}} needs an update</p>{{else}}{{if .BehindOurs}}<p class="sub line-bad">This server needs an update</p>{{else}}{{if .Reachable}}<p class="sub"><span class="dot-on"></span>Connected</p>{{else}}<p class="sub line-bad">{{if .Since}}Can't reach since {{template "when-day" .Since}}{{else}}Not reached yet{{end}}</p>{{end}}{{end}}{{end}}
 <h2 class="label">Friends</h2>
 <div class="card">
   <div class="item pair pair-head"><span>This server</span><span>{{.Name}}</span></div>
@@ -36,18 +36,22 @@
 
 {{define "links-make"}}{{template "sheet-top" .}}
   <h2 class="sheet-title">Create link code</h2>
-  <form method="post" action="/links/make" class="form">
+  {{if .Accounts}}<form method="post" action="/links/make" class="form">
     <label>Account on this server<select name="for">{{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
     <button class="btn primary wide">Create code</button>
-  </form>
+  </form>{{else}}{{template "links-no-account"}}{{end}}
 {{template "sheet-end"}}{{end}}
 
 {{define "links-enter"}}{{template "sheet-top" .}}
   <h2 class="sheet-title">Enter link code</h2>
-  <form method="post" action="/links/enter" class="form">
+  {{if .Accounts}}<form method="post" action="/links/enter" class="form">
     <label{{if .ErrorAddress}} class="bad"{{end}}><span class="label-line">Server address{{template "field-error" .ErrorAddress}}</span><input name="address" value="{{.Address}}" inputmode="url" placeholder="host:port" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
     <label{{if .Error}} class="bad"{{end}}><span class="label-line">Code{{template "field-error" .Error}}</span><input class="code" name="code" value="{{.Code}}" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"></label>
-    <label>Account on this server<select name="for">{{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
+    <label{{if .ErrorAccount}} class="bad"{{end}}><span class="label-line">Account on this server{{template "field-error" .ErrorAccount}}</span><select name="for">{{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
     <button class="btn primary wide">Link servers</button>
-  </form>
+  </form>{{else}}{{template "links-no-account"}}{{end}}
 {{template "sheet-end"}}{{end}}
+
+{{/* A link is between two accounts, so a server with nobody on it has nothing to link yet. */}}
+{{define "links-no-account"}}<p class="sub">Nobody's on this server yet. Invite someone first.</p>
+  <a class="btn wide" href="/people">People</a>{{end}}

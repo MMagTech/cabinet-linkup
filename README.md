@@ -159,9 +159,12 @@ owner ever sees the other's list. There is no chain to a third server.
 On your admin page: Server, Linked servers, Create code. Pick an account and send the message. The other
 owner enters your address and the code on their own page and picks an account: those two people are now
 friends. More pairs can join the same link the same way, and either owner can remove a pair or the whole
-link. Consoles change nothing.
+link. Consoles change nothing. Each server needs someone on it before you link.
 
-If your server is off, your people reach nobody, and friends on a linked server see them as Offline.
+If your server is off, your people reach nobody, and friends on a linked server see them as Offline. A
+link needs each server to reach the other, since an invite travels from the inviter's server to the
+friend's. While yours can't reach theirs, the link shows Can't reach on your admin page and their people
+show as Offline, even if theirs still reaches yours.
 
 ## The relay
 
@@ -176,7 +179,8 @@ may be all your upload can carry.
 to 16. Each takes up to two ports, one for each console, right after 3478, so the tab gives the one line
 to forward on your router: "Forward UDP 3478 to 3482 on your router" for two. The container maps the ports
 for 16, so raising the number needs no new container, only a wider forward. The relay never opens a port
-past your number, and opens one only while a game is using it.
+past your number, and opens one only while a game is using it. Forward the whole range, not only 3478:
+with only 3478 forwarded, Test passes but games through the relay cannot connect.
 
 **Its address** is where the STUN list sees the server's packets come from, the way a console finds its
 own. A reverse proxy, or a service like Cloudflare in front of one, does not change that, so your public
@@ -195,9 +199,9 @@ would rather not carry anyone's games.
 on. That is the only place paying for anything comes in, and it is your choice. A custom STUN address
 does not help: STUN only tells a console its outside address, and carries nothing.
 
-**Test** tries your address from inside the server, as a console would. It can fail wrongly if your router
-cannot loop back to itself, and it checks only 3478/udp, not the games' ports. A friend's game is the
-final answer.
+**Test** checks only 3478/udp, not the games' ports after it, so it can pass while games through the relay
+still fail. If one can't connect, check that your router forwards the whole range the Relay tab gives.
+Test can also fail wrongly if your router cannot loop back to itself. A friend's game is the final answer.
 
 The relay refuses to send to private addresses, so it cannot be used to reach into your home network. A
 password is good for one game and is never given to anyone outside it. Packets stay encrypted between the
