@@ -769,8 +769,8 @@ func (a *App) postLinkCodeCancel(w http.ResponseWriter, r *http.Request, s *sess
 }
 
 type linkEnterView struct {
-	Back, Address, Code, Error, ErrorAddress string
-	Accounts                                 []option
+	Back, Address, Code, Error, ErrorAddress, ErrorAccount string
+	Accounts                                               []option
 }
 
 func (a *App) drawLinkEnter(w http.ResponseWriter, s *session, v linkEnterView) {
@@ -789,11 +789,15 @@ func (a *App) postLinkEnter(w http.ResponseWriter, r *http.Request, s *session) 
 	if v.Code == "" {
 		v.Error = wordRequired
 	}
-	if v.Error != "" || v.ErrorAddress != "" {
+	person := r.FormValue("for")
+	if st := a.Store.Snapshot(); st.Person(person) == nil {
+		v.ErrorAccount = wordRequired
+	}
+	if v.Error != "" || v.ErrorAddress != "" || v.ErrorAccount != "" {
 		a.drawLinkEnter(w, s, v)
 		return
 	}
-	switch err := a.Links.Enter(v.Address, v.Code, r.FormValue("for")); {
+	switch err := a.Links.Enter(v.Address, v.Code, person); {
 	case err == nil:
 		a.done(w, r, s, "/links", "Linked")
 	case errors.Is(err, store.ErrCantReach):

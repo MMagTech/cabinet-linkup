@@ -973,6 +973,61 @@ func TestOneServerGoingAway(t *testing.T) {
 	}
 }
 
+// Their server reaching this one says nothing of this one reaching theirs, and a knock goes from here
+// to there. Until this server reaches theirs, their people are Offline here.
+func TestFriendsOnAServerThisOneCannotReachAreOffline(t *testing.T) {
+	a, c := startServer(t, "Alex's"), startServer(t, "Riley's")
+	maya := player(t, a.address, a.ownCode(), "maya")
+	june := player(t, c.address, c.ownCode(), "june")
+	// c's own address leads nowhere, as one behind a broken reverse proxy does.
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowhere := closed.Addr().String()
+	closed.Close()
+	c.s.Store.Update(func(st *store.State) error { st.Settings.Address = nowhere; return nil })
+	linkUp(t, a, c, "maya", "june")
+	eventually(t, "a tried that address", func() bool {
+		st := a.s.Store.Snapshot()
+		return len(st.Links) == 1 && !st.Links[0].CandidateTried.IsZero()
+	})
+	link := a.s.Store.Snapshot().Links[0]
+	pair := link.Pairs[0]
+	raw, _ := json.Marshal(map[string]any{"op": "link_hello", "name": "Riley's", "address": nowhere, "pairs": []any{
+		map[string]any{"ours": pair.Theirs, "theirs": pair.Ours, "status": "online", "username": "june", "key": june.Key.Public, "stream": 1},
+	}})
+	a.s.Links.Handle(link.ID, "link_hello", raw)
+	if s := friendsOf(t, maya)["june"].Status; s != "offline" {
+		t.Errorf("june shows %q while a cannot reach c", s)
+	}
+	if _, err := maya.Invite(standin.NewInviteID(), friendsOf(t, maya)["june"].ID, "sealed"); err == nil {
+		t.Error("a knock a cannot deliver is refused")
+	}
+	if page := a.get("/links?server=" + link.ID); !strings.Contains(page, "Not reached yet") {
+		t.Error("the owner sees the link has never been reached")
+	}
+
+	// c's owner mends its address and c tells a, as it does when an address changes. A told address waits
+	// 10 minutes between tries, so the test lets that pass. A hello sent before the mend can still arrive
+	// after it, so c keeps telling until a has proved the new address.
+	c.s.Store.Update(func(st *store.State) error { st.Settings.Address = c.address; return nil })
+	eventually(t, "a proves c's mended address", func() bool {
+		if a.s.Store.Snapshot().Links[0].Address == c.address {
+			return true
+		}
+		a.s.Store.Update(func(st *store.State) error { st.Links[0].CandidateTried = time.Time{}; return nil })
+		c.s.Links.Changed()
+		a.s.Links.Changed()
+		time.Sleep(400 * time.Millisecond)
+		return false
+	})
+	eventually(t, "june shows online once a reaches c", func() bool { return friendsOf(t, maya)["june"].Status == "online" })
+	if _, err := maya.Invite(standin.NewInviteID(), friendsOf(t, maya)["june"].ID, "sealed"); err != nil {
+		t.Errorf("the knock goes through: %v", err)
+	}
+}
+
 // A linked server's told address is only a candidate: it can name something on your network, and
 // nothing there can finish the handshake.
 func TestAToldAddressMustProveItself(t *testing.T) {
