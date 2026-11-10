@@ -159,7 +159,7 @@ owner ever sees the other's list. There is no chain to a third server.
 On your admin page: Server, Linked servers, Create code. Pick an account and send the message. The other
 owner enters your address and the code on their own page and picks an account: those two people are now
 friends. More pairs can join the same link the same way, and either owner can remove a pair or the whole
-link. Consoles change nothing. Each server needs an account to pick, so pair a console before you link.
+link. Consoles change nothing. Each server needs someone on it before you link.
 
 If your server is off, your people reach nobody, and friends on a linked server see them as Offline. A
 link needs each server to reach the other, since an invite travels from the inviter's server to the

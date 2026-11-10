@@ -321,8 +321,8 @@ func TestEmptyServerDraws(t *testing.T) {
 		"/people/add":   {"Invite a friend"},
 		"/relay":        {"Off"},
 		"/links":        {"Create code"},
-		"/links/make":   {"Create link code", "Pair a console first."},
-		"/links/enter":  {"Enter link code", "Pair a console first."},
+		"/links/make":   {"Create link code", "Nobody's on this server yet. Invite someone first."},
+		"/links/enter":  {"Enter link code", "Nobody's on this server yet. Invite someone first."},
 		"/server/log":   {"No entries"},
 	} {
 		t.Run(path, func(t *testing.T) { shows(t, r.get(path), words...) })
@@ -336,7 +336,7 @@ func TestEmptyServerDraws(t *testing.T) {
 		}
 	}
 	goesTo(t, r.post("/links/make", "for", ""), "/links/make")
-	shows(t, r.post("/links/enter", "address", "x:1", "code", "GOOD"), "Pair a console first.")
+	shows(t, r.post("/links/enter", "address", "x:1", "code", "GOOD"), "Nobody's on this server yet. Invite someone first.")
 	if len(r.links.entered) != 0 {
 		t.Error("nothing is sent to the other server without an account to link")
 	}
