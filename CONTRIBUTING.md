@@ -64,6 +64,9 @@ A release goes like this:
 3. Use it with real consoles. A fix is another merge, and Apply again pulls the newest `:testing`.
 4. When it is right, tag the commit the Server tab shows, `git tag v0.1.2 <commit>`, and push the tag.
    Then switch back to `:latest`, which is now the same code.
+5. Once Release in Actions has published `:latest`, make a GitHub Release for the tag with a few lines
+   on what changed: `gh release create v0.1.2 --notes "..."`. The update notice on owners' admin pages
+   asks GitHub for the latest Release, not the latest tag, so without one nobody sees it.
 
 ### Going back to `:latest`
 
