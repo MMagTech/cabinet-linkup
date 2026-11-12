@@ -143,6 +143,10 @@ An invite stops after 7 days if nobody uses it. Whoever uses it first takes the 
 on it works only for them, so if a stranger ever uses one you will see their username on People, and
 can remove them.
 
+**A friend with no console** types the invite into
+[2P Start](https://github.com/MMagTech/cabinet-linkup-guest), an app for a Mac or a Windows PC that
+joins a game and never hosts one. The name they type there is the username you see.
+
 **A second account on a console** appears on People the first time it signs in, with no friends. Add
 friends on its page.
 
