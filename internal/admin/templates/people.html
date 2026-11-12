@@ -1,8 +1,11 @@
 {{/* People: everyone on this server, by their login with the owner's note under it
-     if there is one, then the invites waiting, under them so they move nothing. A login
-     that two people share, one account on two consoles, has its console under it too. A note belongs to one person: whoever
-     used the invite, or anyone the owner gives one to on their page. Choosing someone
-     opens them: beside the list on a computer, in place of it on a phone. */}}
+     if there is one, then the invites waiting, under them so they move nothing. Someone on
+     more than one console says how many, and a login that two people share has their
+     consoles under it too. A note belongs to one person: whoever used the invite, or anyone
+     the owner gives one to on their page. Choosing someone opens them: beside the list on a
+     computer, in place of it on a phone. The owner looks after the person, not their
+     consoles: these are only listed, and their code adds any of them, until Change code
+     signs them all out. */}}
 
 {{define "people"}}<div class="split{{if .Selected}} has-detail{{end}}">
   <div class="list">
@@ -27,9 +30,11 @@
 </div>
 <h2 class="label">Note</h2>
 <div class="card"><form method="post" action="/people/note" class="item add-line"><input type="hidden" name="person" value="{{.ID}}"><input name="note" value="{{.Note}}" maxlength="60" aria-label="Note"><button class="btn small">Save</button></form></div>
+<h2 class="label">Consoles</h2>
+<div class="card">{{range .Consoles}}<div class="item"><span class="row-icon">{{template "icon-game"}}</span><span class="item-text"><span class="item-name">Console {{.Number}}</span>{{if .Added}}<span class="item-sub">Added {{template "when-day" .Added}}{{if .Used}} · last used {{template "when-day" .Used}}{{end}}</span>{{end}}</span></div>{{else}}<div class="item"><span class="sub">Signed out of every console</span></div>{{end}}</div>
 <div class="card foot-rows">
-  <form method="post" action="/consoles/new-code" class="item"><input type="hidden" name="id" value="{{.ConsoleID}}"><input type="hidden" name="person" value="{{.ID}}"><button class="row-button"><span class="row-icon">{{template "icon-plus"}}</span><span class="item-text"><span class="item-name">New console code</span></span>{{template "icon-next"}}</button></form>
-  <a class="item" href="/consoles/remove?id={{.ConsoleID}}&person={{.ID}}"><span class="row-icon danger">{{template "icon-close"}}</span><span class="item-text"><span class="item-name danger-text">Remove console</span></span>{{template "icon-next"}}</a>
+  <form method="post" action="/people/code" class="item"><input type="hidden" name="person" value="{{.ID}}"><button class="row-button"><span class="row-icon">{{template "icon-key"}}</span><span class="item-text"><span class="item-name">Their code</span></span>{{template "icon-next"}}</button></form>
+  <a class="item" href="/people/remove?person={{.ID}}"><span class="row-icon danger">{{template "icon-close"}}</span><span class="item-text"><span class="item-name danger-text">Remove {{.Name}}</span></span>{{template "icon-next"}}</a>
 </div>{{end}}
 
 {{define "people-add"}}{{template "sheet-top" .}}

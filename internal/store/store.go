@@ -44,24 +44,66 @@ const (
 	MaxNoteLength = 60
 )
 
-// Console is one paired console. A removed console keeps its row, with no people,
-// so that it can be told it was removed rather than ignored like a stranger.
+// Console is one paired console. A removed console keeps its row, so that it can be
+// told it was removed rather than ignored like a stranger. LastUsed is when it last
+// asked anything, written at most once an hour.
 type Console struct {
-	Number  int
-	Key     []byte
-	Paired  time.Time
-	Removed bool
+	Number   int
+	Key      []byte
+	Paired   time.Time
+	Removed  bool
+	LastUsed time.Time
 }
 
-// Person is one RomM account on one console. Account is the string that console
-// picked for it, which stays the same across a reinstall.
+// Person is one RomM account, on every console it is on. Account is the string a console
+// picks for it, the same on each console and across a reinstall. Console is the one used
+// last, and Others the rest: a console joins someone with their code, or an invite made
+// for them, used by their own account. Console is 0 while they are signed out of every
+// console. ChoseOffline is the person's own Offline, which holds on all of them; a
+// console's own reasons for Offline are not here.
 type Person struct {
-	ID       string
-	Console  int
-	Account  string
-	Username string
-	Note     string
-	LastSeen time.Time
+	ID           string
+	Console      int
+	Others       []int `json:",omitempty"`
+	Account      string
+	Username     string
+	Note         string
+	LastSeen     time.Time
+	ChoseOffline bool `json:",omitempty"`
+}
+
+// On says whether a person is on a console.
+func (p *Person) On(console int) bool {
+	return p.Console == console || slices.Contains(p.Others, console)
+}
+
+// Consoles lists a person's consoles, the one used last first.
+func (p *Person) Consoles() []int {
+	if p.Console == 0 {
+		return slices.Clone(p.Others)
+	}
+	return append([]int{p.Console}, p.Others...)
+}
+
+// Use makes a console the one used last, adding it if it is new to them, and says whether
+// that changed anything. It makes new slices, never changing the old in place, because a
+// snapshot may still be reading them.
+func (p *Person) Use(console int) bool {
+	if p.Console == console {
+		return false
+	}
+	if p.Console == 0 {
+		p.Console = console
+		return true
+	}
+	others := []int{p.Console}
+	for _, n := range p.Others {
+		if n != console {
+			others = append(others, n)
+		}
+	}
+	p.Console, p.Others = console, others
+	return true
 }
 
 // Friendship is two people on this server who can see each other.
@@ -102,15 +144,16 @@ type Link struct {
 
 // The kinds of code.
 const (
-	CodeOwn     = "own"     // the owner's own console: nobody to pick
-	CodeInvite  = "invite"  // a new console, whose account becomes For's friend
-	CodeConsole = "console" // a reinstall: the same console with a new key
-	CodeLink    = "link"    // another server, for the account For
+	CodeOwn    = "own"    // the owner's own console: nobody to pick
+	CodeInvite = "invite" // a new console, whose account becomes For's friend, or For on another console
+	CodeLink   = "link"   // another server, for the account For
+	CodePerson = "person" // For's own: each of their consoles, until it is changed. An invite or
+	// a console's own code becomes this for whoever used it, so a person has one code from the start.
 )
 
-// Code is one code made and not yet typed. Code stays readable until it is used,
-// cancelled or expired, because the page shows it again; K is its slow hash, which is
-// what a joiner's proof is checked against.
+// Code is one code made and not yet typed, or a person's own. Code stays readable until it
+// is used, cancelled or expired, because the page shows it again; K is its slow hash, which
+// is what a joiner's proof is checked against.
 type Code struct {
 	ID      string
 	Kind    string
@@ -118,9 +161,13 @@ type Code struct {
 	K       []byte
 	Note    string
 	For     string
-	Console int
-	Person  string // who the page came back to, for a reinstall's code
 	Expires time.Time
+}
+
+// Live says whether a code can still be used. A person's code has no expiry: it lasts
+// until the owner changes it.
+func (c *Code) Live(now time.Time) bool {
+	return c.Kind == CodePerson || now.Before(c.Expires)
 }
 
 // Stun is one address on the STUN list.
@@ -183,14 +230,93 @@ func (s *State) Person(id string) *Person {
 	return nil
 }
 
-// PersonByAccount returns this console's person for an account, or nil.
-func (s *State) PersonByAccount(console int, account string) *Person {
+// PersonOn returns the person with an account on a console, or nil.
+func (s *State) PersonOn(console int, account string) *Person {
 	for i := range s.People {
-		if s.People[i].Console == console && s.People[i].Account == account {
+		if s.People[i].Account == account && s.People[i].On(console) {
 			return &s.People[i]
 		}
 	}
 	return nil
+}
+
+// PersonFor returns who an account signing in on a console is: the person with that account
+// on it, or else on a console in with it, which this console then joins. Nil means someone new.
+// A console is in with another when someone is on both, so a console only ever comes in with
+// the consoles of the person it joined, never with a stranger's: an account is not a secret.
+func (s *State) PersonFor(console int, account string) *Person {
+	if p := s.PersonOn(console, account); p != nil {
+		return p
+	}
+	with := map[int]bool{}
+	for _, p := range s.People {
+		if p.On(console) {
+			for _, n := range p.Consoles() {
+				with[n] = true
+			}
+		}
+	}
+	for i := range s.People {
+		if s.People[i].Account != account {
+			continue
+		}
+		for _, n := range s.People[i].Consoles() {
+			if with[n] {
+				return &s.People[i]
+			}
+		}
+	}
+	return nil
+}
+
+// CountOn is how many people are on a console.
+func (s *State) CountOn(console int) int {
+	n := 0
+	for i := range s.People {
+		if s.People[i].On(console) {
+			n++
+		}
+	}
+	return n
+}
+
+// SignOut takes a person off every console they are on, and those consoles off the
+// server, with whoever else is on them: Change code, and Remove. The others stay on
+// those consoles, so typing a code on one brings them back too. It returns the consoles.
+func (s *State) SignOut(id string) []int {
+	p := s.Person(id)
+	if p == nil {
+		return nil
+	}
+	gone := p.Consoles()
+	for _, n := range gone {
+		if c := s.ConsoleByNumber(n); c != nil {
+			c.Removed = true
+		}
+	}
+	p.Console, p.Others = 0, nil
+	return gone
+}
+
+// RemoveConsole takes a console off everyone on it. Whoever is on no other console is
+// removed, with their friendships and pairs; the rest stay, on their other consoles.
+func (s *State) RemoveConsole(console int) (gone, stay []string) {
+	for i := range s.People {
+		p := &s.People[i]
+		switch {
+		case !p.On(console):
+		case len(p.Others) == 0:
+			gone = append(gone, p.ID)
+		default:
+			stay = append(stay, p.ID)
+			rest := slices.DeleteFunc(p.Consoles(), func(n int) bool { return n == console })
+			p.Console, p.Others = rest[0], rest[1:]
+		}
+	}
+	for _, id := range gone {
+		s.RemovePerson(id)
+	}
+	return gone, stay
 }
 
 // ConsoleByNumber returns the console with this number, or nil.
@@ -243,6 +369,16 @@ func (s *State) Code(id string) *Code {
 	return nil
 }
 
+// CodeOf returns a person's own code, or nil.
+func (s *State) CodeOf(person string) *Code {
+	for i := range s.Codes {
+		if s.Codes[i].Kind == CodePerson && s.Codes[i].For == person {
+			return &s.Codes[i]
+		}
+	}
+	return nil
+}
+
 // RemoveCode drops a code by id.
 func (s *State) RemoveCode(id string) {
 	s.Codes = slices.DeleteFunc(s.Codes, func(c Code) bool { return c.ID == id })
@@ -286,13 +422,14 @@ func (s *State) RemoveFriends(a, b string) {
 	})
 }
 
-// RemovePerson drops a person, their friendships and their pairs.
+// RemovePerson drops a person, their friendships, their pairs and their code.
 func (s *State) RemovePerson(id string) {
 	s.People = slices.DeleteFunc(s.People, func(p Person) bool { return p.ID == id })
 	s.Friends = slices.DeleteFunc(s.Friends, func(f Friendship) bool { return f.A == id || f.B == id })
 	for i := range s.Links {
 		s.Links[i].Pairs = slices.DeleteFunc(s.Links[i].Pairs, func(p Pair) bool { return p.Ours == id })
 	}
+	s.Codes = slices.DeleteFunc(s.Codes, func(c Code) bool { return c.Kind == CodePerson && c.For == id })
 	for i := range s.Codes {
 		if s.Codes[i].For == id {
 			s.Codes[i].For = ""
@@ -383,6 +520,9 @@ func (s *Store) Snapshot() State {
 	c := s.state
 	c.Consoles = slices.Clone(s.state.Consoles)
 	c.People = slices.Clone(s.state.People)
+	for i := range c.People {
+		c.People[i].Others = slices.Clone(c.People[i].Others)
+	}
 	c.Friends = slices.Clone(s.state.Friends)
 	c.Codes = slices.Clone(s.state.Codes)
 	c.Settings.Stun = slices.Clone(s.state.Settings.Stun)

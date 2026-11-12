@@ -29,7 +29,8 @@
 {{define "sheet-top"}}<div class="sheet-wrap"><a class="sheet-backdrop" href="{{.Back}}" aria-label="Close"></a><div class="sheet" role="dialog" aria-modal="true"><a class="sheet-close" href="{{.Back}}" aria-label="Close">{{template "icon-close"}}</a>{{end}}
 {{define "sheet-end"}}</div></div>{{end}}
 
-{{/* A code ready to send, for a person, a reinstall or a link. */}}
+{{/* A code ready to send, for a person, a reinstall or a link. A person's own code has no
+     expiry, and is changed rather than cancelled. */}}
 {{define "ready"}}{{template "sheet-top" .}}
   <h2 class="sheet-title">{{.Title}}</h2>
   {{if .Who}}<p class="sub">{{.Who}}</p>{{end}}
@@ -39,18 +40,19 @@
 {{.Steps}}
 
 <span class="message-key">Address: {{.Address}}</span>
-<span class="message-key message-code">Code: {{.Code}}</span>
+<span class="message-key message-code">Code: {{.Code}}</span>{{if .Expires}}
 
-Expires {{template "when-date" .Expires}}</pre>
+Expires {{template "when-date" .Expires}}{{end}}</pre>
     <button type="button" class="btn primary wide" data-copy>{{template "icon-copy"}}Copy</button>
     <p class="status-line" role="status" data-copied></p>
   </div>
-  {{if .CancelURL}}<form method="post" action="{{.CancelURL}}"><input type="hidden" name="code" value="{{.ID}}"><button class="text-button danger">{{.CancelWord}}</button></form>{{end}}
+  {{if .ChangeURL}}<a class="text-button danger" href="{{.ChangeURL}}">Change code</a>{{else if .CancelURL}}<form method="post" action="{{.CancelURL}}"><input type="hidden" name="code" value="{{.ID}}"><button class="text-button danger">{{.CancelWord}}</button></form>{{end}}
 {{template "sheet-end"}}{{end}}
 
 {{/* A question before something hard to undo. */}}
 {{define "confirm"}}{{template "sheet-top" .}}
   <h2 class="sheet-title">{{.Question}}</h2>
+  {{if .Sub}}<p class="sub">{{.Sub}}</p>{{end}}
   <div class="sheet-actions">
     <a class="btn" href="{{.Back}}">Cancel</a>
     <form method="post" action="{{.Action}}"><input type="hidden" name="id" value="{{.ID}}"><button class="btn danger-fill">{{.Yes}}</button></form>

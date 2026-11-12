@@ -41,9 +41,8 @@ type People interface {
 	Online(person string) bool
 	// FriendsChanged tells these people's consoles that their lists changed.
 	FriendsChanged(people ...string)
-	// ConsoleRemoved tells a console that it was taken off the server, and ends what these people
-	// on it had open.
-	ConsoleRemoved(number int, people []string)
+	// ConsoleRemoved tells a console that it was taken off the server, and ends what was open on it.
+	ConsoleRemoved(number int)
 	// EndBetween ends what two people have open, after their friendship was removed.
 	EndBetween(a, b string)
 }
@@ -309,9 +308,11 @@ func (a *App) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /people/code", a.inside(a.getPeopleCode))
 	mux.HandleFunc("POST /people/codes/cancel", a.inside(a.postPeopleCodeCancel))
 	mux.HandleFunc("POST /people/note", a.inside(a.postPeopleNote))
-	mux.HandleFunc("POST /consoles/new-code", a.inside(a.postConsoleNewCode))
-	mux.HandleFunc("GET /consoles/remove", a.inside(a.getConsoleRemove))
-	mux.HandleFunc("POST /consoles/remove", a.inside(a.postConsoleRemove))
+	mux.HandleFunc("POST /people/code", a.inside(a.postPersonCode))
+	mux.HandleFunc("GET /people/change-code", a.inside(a.getChangeCode))
+	mux.HandleFunc("POST /people/change-code", a.inside(a.postChangeCode))
+	mux.HandleFunc("GET /people/remove", a.inside(a.getPersonRemove))
+	mux.HandleFunc("POST /people/remove", a.inside(a.postPersonRemove))
 	mux.HandleFunc("POST /friends/add", a.inside(a.postFriendAdd))
 	mux.HandleFunc("POST /friends/remove", a.inside(a.postFriendRemove))
 

@@ -252,8 +252,9 @@ func (m *Manager) helloFor(st *store.State, l store.Link) ourHello {
 		if p == nil {
 			continue
 		}
-		line := pairLine{Ours: pair.Ours, Theirs: pair.Theirs, Username: p.Username, Status: m.hub.StatusOf(pair.Ours), Stream: m.hub.StreamOf(p.Console)}
-		if c := st.ConsoleByNumber(p.Console); c != nil {
+		at := m.hub.KeyConsole(pair.Ours)
+		line := pairLine{Ours: pair.Ours, Theirs: pair.Theirs, Username: p.Username, Status: m.hub.StatusOf(pair.Ours), Stream: m.hub.StreamOf(at)}
+		if c := st.ConsoleByNumber(at); c != nil {
 			line.Key = c.Key
 		}
 		h.Pairs = append(h.Pairs, line)
@@ -416,8 +417,9 @@ func (m *Manager) accountOf(st *store.State, id string) (account, bool) {
 	if p == nil {
 		return account{}, false
 	}
-	a := account{ID: id, Username: p.Username, Stream: m.hub.StreamOf(p.Console)}
-	if c := st.ConsoleByNumber(p.Console); c != nil {
+	at := m.hub.KeyConsole(id)
+	a := account{ID: id, Username: p.Username, Stream: m.hub.StreamOf(at)}
+	if c := st.ConsoleByNumber(at); c != nil {
 		a.Key = c.Key
 	}
 	return a, true
@@ -593,8 +595,14 @@ func (m *Manager) removeLink(id string) error {
 
 // ---- What the hub asks ----
 
-// Invite passes an invite to the other server, and waits for its answer: it may refuse.
+// Invite passes an invite to the other server, and waits for its answer: it may refuse. For someone
+// on more than one console a hello goes first, with the key of the console the invite comes from:
+// the friend's console opens the box with the key its server has.
 func (m *Manager) Invite(id, invite, from, to, sealed string) error {
+	st := m.store.Snapshot()
+	if l, p := st.Link(id), st.Person(from); l != nil && p != nil && len(p.Others) > 0 {
+		m.hello(&st, *l)
+	}
 	var reply answer
 	if err := m.callOn(id, message{Op: "link_invite", Invite: invite, From: from, To: to, Sealed: sealed}, &reply); err != nil {
 		return err

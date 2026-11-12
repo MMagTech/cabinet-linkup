@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -243,5 +244,140 @@ func TestManyPeople(t *testing.T) {
 	t.Logf("%d people, %d friendships: state file %d KB, one save %v", n, 2*(n-1), info.Size()/1024, each)
 	if each > time.Second {
 		t.Errorf("one save took %v", each)
+	}
+}
+
+// One account on two consoles is one person: the console used last first, the rest after it.
+func TestAPersonOnMoreThanOneConsole(t *testing.T) {
+	p := Person{ID: "a", Console: 1}
+	if p.Use(1) || !p.On(1) || p.On(2) {
+		t.Fatalf("%+v", p)
+	}
+	if !p.Use(2) || p.Console != 2 || !slices.Equal(p.Others, []int{1}) {
+		t.Fatalf("a new console is the one used last: %+v", p)
+	}
+	if !p.Use(1) || !slices.Equal(p.Consoles(), []int{1, 2}) {
+		t.Fatalf("going back to the first: %+v", p)
+	}
+}
+
+// A console comes in with another only through someone on both, so an account it signs in is the
+// same person only when that person is on a console in with it.
+func TestWhoAnAccountIsOnAConsole(t *testing.T) {
+	st := State{People: []Person{
+		{ID: "me", Console: 1, Others: []int{2}, Account: "me"},
+		{ID: "kid", Console: 1, Account: "kid"},
+		{ID: "friend", Console: 3, Account: "friend"},
+	}}
+	if p := st.PersonFor(2, "kid"); p == nil || p.ID != "kid" {
+		t.Errorf("console 2 is in with console 1 through me: %+v", p)
+	}
+	if p := st.PersonFor(3, "kid"); p != nil {
+		t.Errorf("console 3 shares nobody with console 1, so its kid is someone new: %+v", p)
+	}
+	if p := st.PersonFor(3, "me"); p != nil {
+		t.Errorf("an account is not a secret: %+v", p)
+	}
+	if st.CountOn(1) != 2 || st.CountOn(2) != 1 {
+		t.Errorf("%d and %d", st.CountOn(1), st.CountOn(2))
+	}
+}
+
+func TestRemovingAConsoleKeepsWhoIsOnAnother(t *testing.T) {
+	st := State{
+		People: []Person{
+			{ID: "me", Console: 2, Others: []int{1}},
+			{ID: "kid", Console: 2},
+			{ID: "friend", Console: 3},
+		},
+		Friends: []Friendship{{A: "me", B: "friend"}, {A: "kid", B: "friend"}},
+	}
+	gone, stay := st.RemoveConsole(2)
+	if !slices.Equal(gone, []string{"kid"}) || !slices.Equal(stay, []string{"me"}) {
+		t.Fatalf("gone %v, stay %v", gone, stay)
+	}
+	me := st.Person("me")
+	if me == nil || me.Console != 1 || len(me.Others) != 0 || !st.AreFriends("me", "friend") {
+		t.Errorf("%+v", st)
+	}
+	if st.Person("kid") != nil || st.AreFriends("kid", "friend") {
+		t.Errorf("%+v", st)
+	}
+}
+
+// Today's state file reads as it is: everyone on one console, nobody having chosen Offline. Nothing
+// new is written for someone on one console, so the file looks as it did.
+func TestAnOlderFileReadsAsItIs(t *testing.T) {
+	dir := t.TempDir()
+	old := `{"Format": 1, "People": [{"ID": "a", "Console": 1, "Account": "x", "Username": "alex", "Note": "", "LastSeen": "2026-11-01T00:00:00Z"}], "NextConsole": 2, "NextLink": 1}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir, noKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.View(func(st *State) {
+		p := st.PersonOn(1, "x")
+		if p == nil || !slices.Equal(p.Consoles(), []int{1}) || p.ChoseOffline {
+			t.Errorf("%+v", st.People)
+		}
+	})
+	s.Update(func(*State) error { return nil })
+	data, _ := os.ReadFile(filepath.Join(dir, "state.json"))
+	if strings.Contains(string(data), "Others") || strings.Contains(string(data), "ChoseOffline") || Format != 1 {
+		t.Errorf("%s", data)
+	}
+}
+
+// A snapshot is read without the lock, so a change to someone's consoles never reaches into it.
+func TestASnapshotKeepsItsOwnConsoles(t *testing.T) {
+	s, err := Open(t.TempDir(), noKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Update(func(st *State) error {
+		st.People = []Person{{ID: "a", Console: 1, Others: []int{2, 3}}}
+		return nil
+	})
+	snap := s.Snapshot()
+	s.Update(func(st *State) error { st.RemoveConsole(2); return nil })
+	if !slices.Equal(snap.People[0].Consoles(), []int{1, 2, 3}) {
+		t.Errorf("%+v", snap.People[0])
+	}
+}
+
+// A person's own code lasts until it is changed; every other code has its time.
+func TestAPersonsCodeHasNoExpiry(t *testing.T) {
+	now := time.Now()
+	if !(&Code{Kind: CodePerson}).Live(now) || (&Code{Kind: CodeInvite, Expires: now.Add(-time.Second)}).Live(now) || !(&Code{Kind: CodeInvite, Expires: now.Add(time.Hour)}).Live(now) {
+		t.Error("only a person's code has no expiry")
+	}
+}
+
+// Change code and Remove sign someone out of every console they are on, and those consoles off the
+// server. Whoever else is on them stays on them, to come back with them.
+func TestSigningSomeoneOutOfEveryConsole(t *testing.T) {
+	st := State{
+		Consoles: []Console{{Number: 1}, {Number: 2}, {Number: 3}},
+		People: []Person{
+			{ID: "me", Console: 2, Others: []int{1}},
+			{ID: "kid", Console: 1},
+			{ID: "friend", Console: 3},
+		},
+		Friends: []Friendship{{A: "me", B: "friend"}},
+	}
+	if gone := st.SignOut("me"); !slices.Equal(gone, []int{2, 1}) {
+		t.Errorf("%v", gone)
+	}
+	me := st.Person("me")
+	if len(me.Consoles()) != 0 || me.On(1) || !st.ConsoleByNumber(1).Removed || !st.ConsoleByNumber(2).Removed || st.ConsoleByNumber(3).Removed {
+		t.Errorf("%+v", st)
+	}
+	if !st.Person("kid").On(1) || !st.AreFriends("me", "friend") {
+		t.Errorf("%+v", st)
+	}
+	if !me.Use(2) || !slices.Equal(me.Consoles(), []int{2}) {
+		t.Errorf("their code adds a console again: %+v", me)
 	}
 }

@@ -29,11 +29,19 @@ type option struct {
 
 type personView struct {
 	ID, Name, Note, Letter, LastSeen string
-	Console                          string // only for a login another person has too
-	Tint, ConsoleID                  int
+	Console                          string // their consoles, or which console for a login another person has too
+	Tint                             int
 	Online, Current                  bool
 	Friends                          []friendView
 	CanAdd                           []option
+	Consoles                         []consoleView
+}
+
+// consoleView is one of the consoles a person is signed in on, to look at: the owner manages the
+// person, with their code, and never a console by itself.
+type consoleView struct {
+	Number      int
+	Added, Used string
 }
 
 type waitingView struct {
@@ -110,11 +118,11 @@ type stunView struct {
 
 type readyView struct {
 	Title, Who, Intro, Steps, Address, Code, Expires string
-	CancelURL, CancelWord, ID, Back                  string
+	CancelURL, CancelWord, ChangeURL, ID, Back       string
 }
 
 type confirmView struct {
-	Question, Action, ID, Yes, Back string
+	Question, Sub, Action, ID, Yes, Back string
 }
 
 func rfc(t time.Time) string {
@@ -138,8 +146,9 @@ func letterOf(name string) string {
 	return "?"
 }
 
-// A login is not unique across consoles: one RomM account on two consoles is two people with one
-// name. Wherever such a person is shown, their console tells them apart.
+// A login is not unique: two RomM accounts can have one name, and one account can be two people, when
+// its second console came in before consoles joined up. Wherever such a person is shown, their
+// consoles tell them apart.
 func sharesName(st *store.State, p store.Person) bool {
 	for _, o := range st.People {
 		if o.ID != p.ID && o.Username == p.Username {
@@ -149,20 +158,61 @@ func sharesName(st *store.State, p store.Person) bool {
 	return false
 }
 
+// signedIn is the consoles a person is signed in on, the one used last first. Change code and
+// Remove sign them out of all of them.
+func signedIn(st *store.State, p store.Person) []store.Console {
+	var out []store.Console
+	for _, n := range p.Consoles() {
+		if c := st.ConsoleByNumber(n); c != nil && !c.Removed {
+			out = append(out, *c)
+		}
+	}
+	return out
+}
+
+// consolesText says which consoles a person is on: "Console 2", "2 consoles", or "No consoles".
+func consolesText(st *store.State, p store.Person) string {
+	on := signedIn(st, p)
+	switch len(on) {
+	case 0:
+		return "No consoles"
+	case 1:
+		return "Console " + strconv.Itoa(on[0].Number)
+	}
+	return strconv.Itoa(len(on)) + " consoles"
+}
+
+// countLine is the line under a person's name: how many consoles they are on when it is not one,
+// or which one when another person has the same name, or "".
+func countLine(st *store.State, p store.Person) string {
+	if len(signedIn(st, p)) != 1 {
+		return consolesText(st, p)
+	}
+	return consoleLine(st, p)
+}
+
 // consoleLine is the line under a person's name that tells them apart, or "".
 func consoleLine(st *store.State, p store.Person) string {
 	if !sharesName(st, p) {
 		return ""
 	}
-	return "Console " + strconv.Itoa(p.Console)
+	return consolesText(st, p)
 }
 
-// nameOf is a person's name on one line, with their console if another person has the same name.
+// nameOf is a person's name on one line, with their consoles if another person has the same name.
 func nameOf(st *store.State, p store.Person) string {
 	if !sharesName(st, p) {
 		return p.Username
 	}
-	return fmt.Sprintf("%s, console %d", p.Username, p.Console)
+	return p.Username + ", " + strings.ToLower(consolesText(st, p))
+}
+
+func consoleRows(st *store.State, p store.Person) []consoleView {
+	var out []consoleView
+	for _, c := range signedIn(st, p) {
+		out = append(out, consoleView{Number: c.Number, Added: rfc(c.Paired), Used: rfc(c.LastUsed)})
+	}
+	return out
 }
 
 // accountOptions lists this server's people for a pick.
@@ -180,8 +230,9 @@ func accountOptions(st *store.State, skip func(store.Person) bool) []option {
 func (a *App) person(st *store.State, p store.Person, selected string) personView {
 	v := personView{
 		ID: p.ID, Name: p.Username, Note: p.Note, Console: consoleLine(st, p), Letter: letterOf(p.Username), Tint: tintOf(p.Username),
-		ConsoleID: p.Console, LastSeen: rfc(p.LastSeen), Online: a.People.Online(p.ID), Current: p.ID == selected,
+		LastSeen: rfc(p.LastSeen), Online: a.People.Online(p.ID), Current: p.ID == selected, Consoles: consoleRows(st, p),
 	}
+	v.Console = countLine(st, p)
 	for _, id := range st.FriendsOf(p.ID) {
 		if f := st.Person(id); f != nil {
 			v.Friends = append(v.Friends, friendView{ID: "f:" + f.ID, Name: f.Username, Console: consoleLine(st, *f), Letter: letterOf(f.Username), Tint: tintOf(f.Username)})
@@ -201,15 +252,12 @@ func (a *App) person(st *store.State, p store.Person, selected string) personVie
 func waitingRows(st *store.State, links bool) []waitingView {
 	var out []waitingView
 	for _, c := range st.Codes {
-		if (c.Kind == store.CodeLink) != links {
+		if (c.Kind == store.CodeLink) != links || c.Kind == store.CodePerson {
 			continue
 		}
 		url := "/people/code?id=" + c.ID
 		if links {
 			url = "/links/code?id=" + c.ID
-		}
-		if c.Kind == store.CodeConsole {
-			url += "&reinstall=" + c.Person
 		}
 		out = append(out, waitingView{ID: c.ID, Note: c.Note, Expires: rfc(c.Expires), MessageURL: url})
 	}
@@ -375,28 +423,11 @@ func (a *App) settingsView() settingsView {
 	return v
 }
 
-// consoleNames words the question before removing a console, by who is on it.
-func consoleNames(st *store.State, number int) string {
-	var names []string
-	for _, p := range st.People {
-		if p.Console == number {
-			names = append(names, p.Username)
-		}
-	}
-	switch len(names) {
-	case 0:
-		return "console " + strconv.Itoa(number)
-	case 1:
-		return names[0]
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
-}
-
 // purge drops codes past their time. A code is refused at its exact time anyway; this keeps
 // the page and the file from holding it.
 func (a *App) purge() {
 	now := time.Now()
-	expired := func(c store.Code) bool { return now.After(c.Expires) }
+	expired := func(c store.Code) bool { return !c.Live(now) }
 	any := false
 	a.Store.View(func(st *store.State) { any = slices.ContainsFunc(st.Codes, expired) })
 	if any {

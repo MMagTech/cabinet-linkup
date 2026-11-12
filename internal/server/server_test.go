@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -620,7 +621,7 @@ func TestAnInviteCodeCannotBecomeALink(t *testing.T) {
 	if len(st.Links) != 0 {
 		t.Errorf("%+v", st.Links)
 	}
-	if st.Code(st.Codes[0].ID) == nil || st.Codes[0].Code != code {
+	if !slices.ContainsFunc(st.Codes, func(c store.Code) bool { return c.Kind == store.CodeInvite && c.Code == code }) {
 		t.Error("a refused kind must not use the code")
 	}
 	player(t, b.address, code, "sam")
@@ -634,7 +635,8 @@ func TestALinkCodeCannotBecomeAConsole(t *testing.T) {
 	if err := c.Pair(code, "a", "a"); err == nil {
 		t.Fatal("a link code made a console")
 	}
-	if st := b.s.Store.Snapshot(); len(st.Consoles) != 1 || len(st.Codes) != 1 {
+	st := b.s.Store.Snapshot()
+	if len(st.Consoles) != 1 || !slices.ContainsFunc(st.Codes, func(c store.Code) bool { return c.Kind == store.CodeLink && c.Code == code }) {
 		t.Errorf("%+v", st)
 	}
 }
@@ -664,23 +666,22 @@ func TestAPairedKeyCannotTakeASecondPlace(t *testing.T) {
 	if err := again.Pair(code, "acct-alex", "alex"); err == nil {
 		t.Error("a key already here takes friends from the owner's page, not a code")
 	}
-	if st := b.s.Store.Snapshot(); len(st.Codes) != 1 {
+	st := b.s.Store.Snapshot()
+	if !slices.ContainsFunc(st.Codes, func(c store.Code) bool { return c.Kind == store.CodeInvite && c.Code == code }) {
 		t.Error("and the code is not used")
 	}
 }
 
+// A reinstall types the person's own code, the code they first came in with. Change code then signs
+// out every console they are on, and the new code brings back the ones they still have.
 func TestReinstallKeepsAccountsAndFriends(t *testing.T) {
 	b := startServer(t, "Ours")
-	alex := player(t, b.address, b.ownCode(), "alex")
+	own := b.ownCode()
+	alex := player(t, b.address, own, "alex")
 	sam := player(t, b.address, b.invite("alex"), "sam")
-	number := alex.Number
 	person := b.person("alex")
 
-	code := b.code("/consoles/new-code", "", "id", fmt.Sprint(number), "person", person)
-	reinstalled := player(t, b.address, code, "alex")
-	if reinstalled.Number != number {
-		t.Errorf("console %d became %d", number, reinstalled.Number)
-	}
+	reinstalled := player(t, b.address, own, "alex")
 	if b.person("alex") != person {
 		t.Error("the account must keep its person")
 	}
@@ -690,8 +691,24 @@ func TestReinstallKeepsAccountsAndFriends(t *testing.T) {
 	if !bytes.Equal(friendsOf(t, sam)["alex"].Key, reinstalled.Key.Public) {
 		t.Error("the friend hears the new key")
 	}
+
+	b.form("/people/change-code", "id", person)
 	if err := alex.Status("online"); err == nil {
-		t.Error("the old key must be finished")
+		t.Error("the old console is signed out")
+	}
+	st := b.s.Store.Snapshot()
+	again := &standin.Console{Key: reinstalled.Key, Client: proof.NewClient(b.address, reinstalled.Key, nil)}
+	if err := again.Pair(own, "acct-alex", "alex"); err == nil {
+		t.Error("the old code is finished")
+	}
+	if err := again.Pair(st.CodeOf(person).Code, "acct-alex", "alex"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := again.Signin("acct-alex", "alex", "online"); err != nil {
+		t.Fatal(err)
+	}
+	if b.person("alex") != person || friendsOf(t, again)["sam"].Username != "sam" {
+		t.Error("back with the new code, friends and all")
 	}
 }
 
@@ -722,7 +739,7 @@ func TestRemovedConsoleIsTold(t *testing.T) {
 	b := startServer(t, "Ours")
 	alex := player(t, b.address, b.ownCode(), "alex")
 	sam := player(t, b.address, b.invite("alex"), "sam")
-	b.form("/consoles/remove", "id", fmt.Sprint(sam.Number))
+	b.form("/people/remove", "id", b.person("sam"))
 	if len(friendsOf(t, alex)) != 0 {
 		t.Error("they leave the list, with no notice")
 	}

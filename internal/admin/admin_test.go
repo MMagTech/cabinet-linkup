@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,10 +26,10 @@ type fakePeople struct {
 	removed []int
 }
 
-func (f *fakePeople) Online(id string) bool                 { return f.online[id] }
-func (f *fakePeople) FriendsChanged(people ...string)       { f.changed = append(f.changed, people...) }
-func (f *fakePeople) ConsoleRemoved(number int, _ []string) { f.removed = append(f.removed, number) }
-func (f *fakePeople) EndBetween(string, string)             {}
+func (f *fakePeople) Online(id string) bool           { return f.online[id] }
+func (f *fakePeople) FriendsChanged(people ...string) { f.changed = append(f.changed, people...) }
+func (f *fakePeople) ConsoleRemoved(number int)       { f.removed = append(f.removed, number) }
+func (f *fakePeople) EndBetween(string, string)       {}
 
 type fakeLinks struct {
 	state   LinkState
@@ -187,7 +188,6 @@ func (r *rig) fill() {
 		st.Codes = []store.Code{
 			{ID: "c1", Kind: store.CodeInvite, Code: "K7MR-4QXT-9HPV", Note: "Jordan", For: "a1", Expires: time.Now().Add(time.Hour)},
 			{ID: "c2", Kind: store.CodeLink, Code: "T3WN-8FJY-6CRE", Note: "For maya", For: "a2", Expires: time.Now().Add(time.Hour)},
-			{ID: "c3", Kind: store.CodeConsole, Code: "H9KD-2MXA-5VPW", Note: "New console code", Console: 2, Person: "a3", Expires: time.Now().Add(time.Hour)},
 			{ID: "c4", Kind: store.CodeOwn, Code: "B4ZG-7RQN-3WTF", Note: "Your own console", Expires: time.Now().Add(time.Hour)},
 		}
 		st.Games = store.Games{Direct: 51, Relayed: 7, Failed: 2}
@@ -284,28 +284,28 @@ func TestEveryScreenDraws(t *testing.T) {
 	r.relay.status.Games = 7
 
 	for path, words := range map[string][]string{
-		"/status":                         {"Status", "1 of 4", "58, 87% direct", "123", "December 1"},
-		"/status/games":                   {"Games", "Played", ">58<", ">51<", ">7<", ">2<"},
-		"/people":                         {"People", "admin", "maya", "My daughter", "alex", "Jordan", "New console code"},
-		"/people?person=a1":               {"Friends", "alex", "riley", "Riley&#39;s", "Online", "Remove console", "New console code"},
-		"/people?person=a2":               {"My daughter", "june", "Last seen"},
-		"/people/add":                     {"Invite a friend", "Friend of", "admin, console 1", "admin, console 3", "maya"},
-		"/people/code?id=c1":              {"Invite ready", "Jordan", "K7MR-4QXT-9HPV", "linkup.example.net:7845", "Let&#39;s play on CabinetOS with LinkUp.", "Cancel invite", "Copy"},
-		"/people/code?id=c3&reinstall=a3": {"New console code", "H9KD-2MXA-5VPW", "Here&#39;s a new LinkUp code for your console."},
-		"/people/code?id=c4":              {"Your console", "B4ZG-7RQN-3WTF", "The code for my own console."},
-		"/consoles/remove?id=1&person=a1": {"Remove admin and maya?"},
-		"/relay":                          {"Relay", "On", "123", "of 500 GB", "7 games, resets", "December 1", "203.0.113.24:3478", "Test"},
-		"/server":                         {"Server", "Our server", "linkup.example.net:7845", "Linked servers", "Settings"},
-		"/server/settings":                {"Settings", "Password", "1.2.3", "Graphite", "Midnight", "Light", "CabinetOS", "Sign out"},
-		"/server/stun":                    {"STUN", "stun.cloudflare.com:3478", "Reset"},
-		"/server/log":                     {"Log", "Download"},
-		"/password":                       {"Change password", "Current password", "New password", "Confirm password"},
-		"/links":                          {"Linked servers", "Riley&#39;s", "Create code", "Enter code", "Codes waiting", "For maya"},
-		"/links?server=l1":                {"This server", "riley", "june", "Add friends", "Unlink", "Connected"},
-		"/links/make":                     {"Create link code", "Account on this server"},
-		"/links/enter":                    {"Enter link code", "Server address", "Link servers"},
-		"/links/code?id=c2":               {"Link code", "For maya", "This code is for maya.", "T3WN-8FJY-6CRE", "Server, Linked servers, Enter code."},
-		"/links/remove?id=l1":             {"Unlink Riley&#39;s?"},
+		"/status":                       {"Status", "1 of 4", "58, 87% direct", "123", "December 1"},
+		"/status/games":                 {"Games", "Played", ">58<", ">51<", ">7<", ">2<"},
+		"/people":                       {"People", "admin", "maya", "My daughter", "alex", "Jordan", "Your own console"},
+		"/people?person=a1":             {"Friends", "alex", "riley", "Riley&#39;s", "Online", "Consoles", "Their code", "Remove admin"},
+		"/people?person=a2":             {"My daughter", "june", "Last seen"},
+		"/people/add":                   {"Invite a friend", "Friend of", "admin, console 1", "admin, console 3", "maya"},
+		"/people/code?id=c1":            {"Invite ready", "Jordan", "K7MR-4QXT-9HPV", "linkup.example.net:7845", "Let&#39;s play on CabinetOS with LinkUp.", "Cancel invite", "Copy"},
+		"/people/code?id=c4":            {"Your console", "B4ZG-7RQN-3WTF", "The code for my own console."},
+		"/people/remove?person=a2":      {"Remove maya?", "maya&#39;s friends go too"},
+		"/people/change-code?person=a3": {"Change alex&#39;s code?", "Every console alex is on is signed out"},
+		"/relay":                        {"Relay", "On", "123", "of 500 GB", "7 games, resets", "December 1", "203.0.113.24:3478", "Test"},
+		"/server":                       {"Server", "Our server", "linkup.example.net:7845", "Linked servers", "Settings"},
+		"/server/settings":              {"Settings", "Password", "1.2.3", "Graphite", "Midnight", "Light", "CabinetOS", "Sign out"},
+		"/server/stun":                  {"STUN", "stun.cloudflare.com:3478", "Reset"},
+		"/server/log":                   {"Log", "Download"},
+		"/password":                     {"Change password", "Current password", "New password", "Confirm password"},
+		"/links":                        {"Linked servers", "Riley&#39;s", "Create code", "Enter code", "Codes waiting", "For maya"},
+		"/links?server=l1":              {"This server", "riley", "june", "Add friends", "Unlink", "Connected"},
+		"/links/make":                   {"Create link code", "Account on this server"},
+		"/links/enter":                  {"Enter link code", "Server address", "Link servers"},
+		"/links/code?id=c2":             {"Link code", "For maya", "This code is for maya.", "T3WN-8FJY-6CRE", "Server, Linked servers, Enter code."},
+		"/links/remove?id=l1":           {"Unlink Riley&#39;s?"},
 	} {
 		t.Run(path, func(t *testing.T) { shows(t, r.get(path), words...) })
 	}
@@ -444,17 +444,33 @@ func TestInvitesAndCodes(t *testing.T) {
 	})
 	goesTo(t, r.post("/people/add", "note", "x", "for", "nobody"), "/people/add")
 
-	rec = r.post("/consoles/new-code", "id", "2", "person", "a3")
-	if !strings.Contains(rec.Header().Get("Location"), "reinstall=a3") {
-		t.Fatal(rec.Header().Get("Location"))
+	// Their own code: made once, then the same one, with no expiry, and not an invite waiting.
+	goesTo(t, r.post("/people/code", "person", "a3"), "/people/code?id="+r.newestCode())
+	own := r.newestCode()
+	goesTo(t, r.post("/people/code", "person", "a3"), "/people/code?id="+own)
+	r.store.View(func(st *store.State) {
+		if c := st.Code(own); c.Kind != store.CodePerson || c.For != "a3" || !c.Expires.IsZero() {
+			t.Errorf("%+v", c)
+		}
+	})
+	page := r.get("/people/code?id=" + own)
+	shows(t, page, "Code for alex", "It works on each of your consoles, signed in as you.", "Change code", "/people/change-code?person=a3")
+	if message, _, _ := strings.Cut(page.Body.String()[strings.Index(page.Body.String(), `class="message-text"`):], "</pre>"); strings.Contains(message, "Expires") {
+		t.Errorf("their own code does not expire: %s", message)
 	}
-	shows(t, r.get(rec.Header().Get("Location")), "New console code")
+	if strings.Contains(r.get("/people").Body.String(), "/people/code?id="+own) {
+		t.Error("their own code is not an invite waiting")
+	}
+	goesTo(t, r.post("/people/code", "person", "nobody"), "/people")
 
 	r.store.Update(func(st *store.State) error { st.Codes[0].Expires = time.Now().Add(-time.Minute); return nil })
 	r.get("/people")
 	r.store.View(func(st *store.State) {
 		if st.Code("c1") != nil {
 			t.Error("an expired code should be gone")
+		}
+		if st.Code(own) == nil {
+			t.Error("their own code stays")
 		}
 	})
 }
@@ -489,17 +505,22 @@ func TestNotesAndFriends(t *testing.T) {
 	}
 }
 
-func TestRemoveConsole(t *testing.T) {
+// Remove takes the person off, with their friends and their code, and signs out their consoles.
+func TestRemoveAPerson(t *testing.T) {
 	r := newRig(t)
 	r.setUp()
 	r.fill()
-	goesTo(t, r.post("/consoles/remove", "id", "2"), "/people")
+	r.post("/people/code", "person", "a3")
+	shows(t, r.get("/people/remove?person=a3"), "Remove alex?", "alex&#39;s friends go too, and every console alex is on is signed out.")
+	goesTo(t, r.post("/people/remove", "id", "a3"), "/people")
 	r.store.View(func(st *store.State) {
 		if st.Person("a3") != nil || !st.ConsoleByNumber(2).Removed || st.AreFriends("a1", "a3") {
 			t.Errorf("%+v", st)
 		}
-		if st.Code("c3") != nil {
-			t.Error("its new code should go too")
+		for _, c := range st.Codes {
+			if c.Kind == store.CodePerson {
+				t.Errorf("their code should go too: %+v", c)
+			}
 		}
 	})
 	if len(r.people.removed) != 1 || r.people.removed[0] != 2 {
@@ -887,7 +908,7 @@ func TestSignedOutGetsNothing(t *testing.T) {
 			t.Errorf("%s: %d", path, rec.Code)
 		}
 	}
-	for _, path := range []string{"/people/add", "/server/theme", "/relay/on", "/consoles/remove"} {
+	for _, path := range []string{"/people/add", "/server/theme", "/relay/on", "/people/remove", "/people/change-code", "/people/code"} {
 		goesTo(t, r.post(path), "/signin")
 	}
 }
@@ -955,4 +976,49 @@ func TestGamesAtOnce(t *testing.T) {
 			}
 		})
 	}
+}
+
+// admin on consoles 1 and 3: once on People, with their consoles listed and one code for them all.
+func TestOnePersonOnTwoConsoles(t *testing.T) {
+	r := newRig(t)
+	r.setUp()
+	r.fill()
+	r.store.Update(func(st *store.State) error {
+		st.RemovePerson("a4")
+		st.Person("a1").Others = []int{3}
+		st.ConsoleByNumber(1).Paired = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+		st.ConsoleByNumber(3).Paired = time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
+		st.ConsoleByNumber(3).LastUsed = time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+		return nil
+	})
+	r.people.online["a1"] = true
+	people := r.get("/people").Body.String()
+	if strings.Count(people, `<span class="item-name">admin</span>`) != 1 || !strings.Contains(people, `<span class="item-sub">2 consoles</span>`) {
+		t.Errorf("admin shows once, on 2 consoles:\n%s", people)
+	}
+	shows(t, r.get("/people?person=a1"), "Online · 2 consoles", ">Console 1<", ">Console 3<", "Added <time", "last used <time",
+		`action="/people/code"`, "Their code", "Remove admin")
+	shows(t, r.get("/people?person=a3"), `<div class="item-name">admin</div></div>`)
+
+	goesTo(t, r.post("/people/code", "person", "a1"), "/people/code?id="+r.newestCode())
+	old := r.newestCode()
+	shows(t, r.get("/people/change-code?person=a1"), "Change admin&#39;s code?", "Every console admin is on is signed out until the new code is typed on it.")
+	goesTo(t, r.post("/people/change-code", "id", "a1"), "/people/code?id="+r.newestCode())
+	r.store.View(func(st *store.State) {
+		c := st.Code(r.newestCode())
+		if st.Code(old) != nil || c.Kind != store.CodePerson || c.For != "a1" {
+			t.Errorf("a new code in place of the old: %+v", st.Codes)
+		}
+		p := st.Person("a1")
+		if len(p.Consoles()) != 0 || !st.ConsoleByNumber(1).Removed || !st.ConsoleByNumber(3).Removed || !st.AreFriends("a1", "a3") {
+			t.Errorf("signed out everywhere, friends kept: %+v", st)
+		}
+		if st.Person("a2") == nil {
+			t.Error("maya, on console 1 too, is kept")
+		}
+	})
+	if !slices.Equal(r.people.removed, []int{1, 3}) {
+		t.Errorf("%v", r.people.removed)
+	}
+	shows(t, r.get("/people?person=a1"), "No consoles", "Signed out of every console")
 }

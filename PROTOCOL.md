@@ -17,9 +17,10 @@ plain IP, IPv6 or a VPN address. So the protocol holds to three requirements:
    server, or posing as the server at its address, cannot pose as either side,
    unless they hold the code. A code travels in an ordinary message, so whoever
    holds it can use it first and take that place, or sit in the middle of that one
-   pairing. An invite code makes its user the chosen account's friend at once, and a
-   link code pairs at once. It works once, and the owner sees the username on the
-   People list and can remove them.
+   pairing. An invite code makes its user the chosen account's friend at once, or, used
+   by that very account, puts its console in with them, and a link code pairs at once.
+   It works once, and the owner sees the username on the People list and can remove
+   them.
 
 And two more that follow from those:
 
@@ -97,7 +98,10 @@ Twelve characters in three groups of four, `K7MR-4QXT-9HPV`, drawn at random fro
 `ACDEFGHJKMNPQRTUVWXYZ2345679` (28 characters, about 57.7 bits). A reader accepts
 what `23456789ABCDEFGHJKMNPQRSTUVWXYZ` allows, any case, and any dashes or
 spaces; it upper-cases and removes the rest before hashing. A code works once and
-stops at its expiry, 7 days after it was made.
+stops at its expiry, 7 days after it was made. A person's own code is the exception:
+it works for each console signed in as that person, as often as needed, until the
+owner changes it. An invite, or a console's own code, becomes the code of the person
+who uses it, unless they have one already.
 
 The slow hash, `K`:
 
@@ -116,8 +120,10 @@ not be the one another console typed. The server works out `K` once, when the co
 is made, and keeps it beside the code. Checking a guess at the server therefore
 costs the guesser the slow hash and the server almost nothing.
 
-A code has one kind, set when it is made: a console's own, an invite, a reinstall or a
-link. The first three are used by a console and the last by a server.
+A code has one kind, set when it is made: a console's own, an invite, a reinstall, a
+person's own or a link. The first four are used by a console and the last by a server.
+A reinstall code is no longer made: a reinstalled console types its person's own code, and
+comes in as one more console of theirs.
 
 ## Pairing
 
@@ -149,7 +155,8 @@ random, used once and short-lived, so nothing here spends that margin.
   cannot make one, and a console that cannot open it stops and keeps nothing.
 - **Message 3 binds the joiner's key.** The server checks it, then uses up the code
   under a lock, so the first to finish takes the place. A joiner whose `kind` does not
-  fit the code's kind is refused and the code is not used. A key the server already
+  fit the code's kind is refused and the code is not used. A person's own code is never
+  used up, and is refused for any `account` but theirs. A key the server already
   knows is refused unless the code is a reinstall code for that console, or the key is
   a linked server adding a pair, or a console that was removed.
 - **Both long-term keys are hashed into the handshake,** so nobody can swap either
@@ -179,7 +186,9 @@ make each failure cost the server more than the last.
 it, can try guesses at leisure, at one Argon2id per guess, over about 2^57.7 codes.
 A code is good for 7 days at most and is used up the moment the real pairing
 completes, so a guess only helps someone who blocks the real pairing and finishes
-the search inside those 7 days.
+the search inside those 7 days. A person's own code has no expiry, so for it the
+search has no such limit: an owner who thinks a code has been seen changes it, which
+also signs that person out of every console.
 
 ### Who is joining
 
@@ -191,8 +200,8 @@ The payload of message 3 is JSON. A console:
 `account` is a string the console picks that stays the same for that account on that
 console: a hash of the RomM server's identity and the account's id, so that the same small
 id on a different RomM server is a different person. The server looks it up only within one
-console, to recognise the account after a reinstall, and shows only `username`. Only a
-reinstall code moves a console to a new key.
+console and the consoles in with it (below), to recognise the account after a reinstall and on
+another console, and shows only `username`. Only a reinstall code moves a console to a new key.
 
 A server, linking:
 
@@ -207,6 +216,31 @@ The reply:
     refused: {"ok": false, "error": "wrong_code" or "bad_request"}
 
 A joiner that gets no answer to message 3 sends the same bytes again.
+
+### One account on more than one console
+
+One `account` is one person on every console it is on: shown once, never in their own friends
+list, with one set of friends.
+
+- **A console joins someone** by using their own code, or an invite code made for them, while
+  signed in as their own account. From then on it is in with their consoles: an account signing in on it that is already on
+  one of them is that same person. A console is in with another only through someone on both, and an
+  invite used by any other account brings in only new people, because `account` is not a secret.
+  This trusts whoever holds someone's code, or an invite made for them: by sending that person's
+  `account`, they join as them.
+- **A friend is given one console's key,** and a knock rings that console only. It is the console of
+  an invite or session the person is part of, because its boxes are sealed for that key. Otherwise it
+  is the one they signed in on, or came back to from Offline, last, of those showing them Online, and
+  with none, the one they used last. An invite or session stays on the consoles it began on: only
+  those can answer, signal or end it, and one of them going away ends it.
+- **Status** is the most of what their consoles say: Linked up on any of them is Linked up, and Online
+  on any is Online. A console's own reasons for Offline stay with that console. Offline the person
+  chose, sent as `status` with `chosen`, holds on all of them until Online is chosen the same way:
+  their other consoles hear a `chosen` event, and `signin` answers it.
+- **The owner signs out a person, not a console.** Changing their code takes them off every console
+  they are on, and those consoles off the server, until a code is typed on each again; whoever else
+  is on one of them comes back with it. Removing the person does the same and drops them. `leave`
+  takes a console off its people: someone on no other console goes with it.
 
 ## Sessions
 
@@ -303,9 +337,9 @@ A console has one current account at a time. Every operation is that account's.
 
 | `op` | Fields | Answer |
 |---|---|---|
-| `signin` | `account`, `username`, `status` | `{"person": "<id>"}`. A new account appears on the owner's page, with no friends. The account signed in before this one shows Offline. |
+| `signin` | `account`, `username`, `status` | `{"person": "<id>", "chosen": "online" or "offline"}`, `chosen` being the person's own choice. A new account appears on the owner's page, with no friends. The account signed in before this one shows Offline, unless it is on another console. |
 | `signout` | | |
-| `status` | `status`: `online`, `offline`, `linkedup` | |
+| `status` | `status`: `online`, `offline`, `linkedup`; `chosen`: `true` when the person chose Online or Offline, which then holds on all their consoles | |
 | `friends` | | `{"friends": [...]}` |
 | `config` | | `{"name": "<server>", "stun": ["host:port", ...]}` |
 | `wait` | `after` | `{"epoch": "<id>", "events": [...], "next": n}` |
@@ -317,14 +351,15 @@ A console has one current account at a time. Every operation is that account's.
 | `end` | `session` | |
 | `report` | `session`, `path`: `direct`, `relay`, `failed`; `reason`: a word from the list below | |
 | `relay` | `session` | `{"relay": {"urls": [...], "username": "...", "password": "..."}}`, or `{"relay": null, "reason": "off" or "limit"}` |
-| `leave` | | The console and its accounts are gone from the server. |
+| `leave` | | The console and its accounts are gone from the server, apart from those on another console. |
 
 **A friend,** in `friends`:
 
     {"id": "<id>", "username": "alex", "server": "Riley's", "status": "online",
      "key": "<base64>", "stream": 1, "invite": {"id": "...", "sealed": "..."}}
 
-`invite` is there only while they have invited you. `status` is `online`, `linkedup` or
+`invite` is there only while they have invited you, on the console the knock rings. `key` is the
+key of one of the friend's consoles, and can change with a `friends` event. `status` is `online`, `linkedup` or
 `offline`, and a friend on a linked server that is behind or out of reach is `offline`.
 The owner's notes never reach a console.
 
@@ -351,6 +386,7 @@ which still delivers what is queued.
 | `signal` | `session`, `sealed` | |
 | `session_ended` | `session` | |
 | `removed` | | This console was taken off the server. |
+| `chosen` | `status` | The person chose Online or Offline on another of their consoles, and it holds on this one too. |
 
 **What the server owns:** each account's status; who can be invited; refusing a knock on
 anyone Offline or Linked up; the 30 minutes; declines; a join ending any other invite to
