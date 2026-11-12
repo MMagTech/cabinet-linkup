@@ -270,7 +270,7 @@ func (h *Handler) pairFirst(w http.ResponseWriter, r *http.Request, msg []byte) 
 	var ks [][]byte
 	var ids []string
 	for _, c := range st.Codes {
-		if now.Before(c.Expires) {
+		if c.Live(now) {
 			ks = append(ks, c.K)
 			ids = append(ids, c.ID)
 		}
@@ -427,8 +427,11 @@ func (h *Handler) pairSecond(w http.ResponseWriter, r *http.Request, rest []byte
 	writeBytes(w, sealed)
 }
 
-// joinConsole is a console using a code. A reinstall keeps the console's number and people, with a
-// new key. A new console gets a number. The account signed in at this moment is the friend.
+// joinConsole is a console using a code. A new console gets a number, and a console that was signed
+// out gets its own back. The account signed in at this moment is the friend, or, when
+// it is the very account the invite was made for, that person on one more console. An invite or a
+// console's own code then becomes that person's own code, unless they have one. A person's own code
+// works only for their account, and is never used up.
 func (h *Hub) joinConsole(c store.Code, key []byte, j consoleJoining) (joinResult, error) {
 	if !cleanWord(j.Account, maxAccount) || !cleanWord(j.Username, maxUsername) {
 		return joinResult{Error: "bad_request"}, ErrBadRequest
@@ -442,16 +445,13 @@ func (h *Hub) joinConsole(c store.Code, key []byte, j consoleJoining) (joinResul
 		if st.LinkByKey(key) != nil {
 			return ErrUnavailable
 		}
+		owner := st.Person(c.For)
+		if c.Kind == store.CodePerson && (owner == nil || owner.Account != j.Account) {
+			return ErrUnavailable
+		}
 		known := st.ConsoleByKey(key)
 		switch c.Kind {
-		case store.CodeConsole:
-			con := st.ConsoleByNumber(c.Console)
-			if con == nil || (known != nil && known.Number != con.Number) {
-				return ErrUnavailable
-			}
-			con.Key, con.Removed = key, false
-			number = con.Number
-		case store.CodeOwn, store.CodeInvite:
+		case store.CodeOwn, store.CodeInvite, store.CodePerson:
 			switch {
 			case known == nil:
 				number = st.NextConsole
@@ -467,11 +467,18 @@ func (h *Hub) joinConsole(c store.Code, key []byte, j consoleJoining) (joinResul
 		default:
 			return ErrUnavailable
 		}
-		p := st.PersonByAccount(number, j.Account)
+		p := st.PersonFor(number, j.Account)
+		switch {
+		case c.Kind == store.CodePerson:
+			p = owner
+		case p == nil && c.Kind == store.CodeInvite && owner != nil && owner.Account == j.Account:
+			p = owner
+		}
 		if p == nil {
 			st.People = append(st.People, store.Person{ID: store.NewID(), Console: number, Account: j.Account, Username: j.Username, LastSeen: h.now()})
 			p = &st.People[len(st.People)-1]
 		} else {
+			p.Use(number)
 			p.Username, p.LastSeen = j.Username, h.now()
 		}
 		person = p.ID
@@ -482,7 +489,15 @@ func (h *Hub) joinConsole(c store.Code, key []byte, j consoleJoining) (joinResul
 				p.Note = c.Note
 			}
 		}
-		st.RemoveCode(c.ID)
+		switch {
+		case c.Kind == store.CodePerson:
+		case (c.Kind == store.CodeInvite || c.Kind == store.CodeOwn) && st.CodeOf(p.ID) == nil:
+			// The code they used becomes their own, for each of their consoles, until it is changed.
+			k := st.Code(c.ID)
+			k.Kind, k.For, k.Note, k.Expires = store.CodePerson, p.ID, "", time.Time{}
+		default:
+			st.RemoveCode(c.ID)
+		}
 		return nil
 	})
 	if err != nil {
@@ -504,16 +519,12 @@ func (h *Handler) joinConsole(p *pairing, raw []byte) joinResult {
 	}
 	st := h.store.Snapshot()
 	code := st.Code(p.code)
-	if code == nil || code.Kind == store.CodeLink || !h.now().Before(code.Expires) {
+	if code == nil || code.Kind == store.CodeLink || !code.Live(h.now()) {
 		return joinResult{Error: "wrong_code"}
 	}
 	result, err := h.hub.joinConsole(*code, p.r.Key, j)
 	if err != nil {
 		return joinResult{Error: "wrong_code"}
-	}
-	if code.Kind == store.CodeConsole {
-		// A reinstall: whatever the old key had open is finished.
-		h.DropConsole(result.Console)
 	}
 	return result
 }
@@ -752,6 +763,7 @@ type request struct {
 	Session  string `json:"session"`
 	Path     string `json:"path"`
 	Reason   string `json:"reason"`
+	Chosen   bool   `json:"chosen"`
 }
 
 var errRemoved = errors.New("removed")
@@ -788,18 +800,23 @@ func (h *Handler) operate(ctx context.Context, number int, plain []byte) any {
 	h.hub.Seen(number)
 	switch q.Op {
 	case "signin":
-		id, err := h.hub.Signin(number, q.Account, q.Username, q.Status)
+		id, chose, err := h.hub.Signin(number, q.Account, q.Username, q.Status)
 		if err != nil {
 			return failed(err)
 		}
+		chosen := StatusOnline
+		if chose {
+			chosen = StatusOffline
+		}
 		return struct {
 			Person string `json:"person"`
-		}{id}
+			Chosen string `json:"chosen"`
+		}{id, chosen}
 	case "signout":
 		h.hub.Signout(number)
 		return struct{}{}
 	case "status":
-		return okOr(h.hub.SetStatus(number, q.Status))
+		return okOr(h.hub.SetStatus(number, q.Status, q.Chosen))
 	case "friends":
 		list, err := h.hub.Friends(number)
 		if err != nil {

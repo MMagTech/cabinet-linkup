@@ -336,7 +336,8 @@ func (a *App) getSetupOwnCode(w http.ResponseWriter, r *http.Request, _ *session
 	a.bare(w, http.StatusOK, part{"setup-own-code", ownCodeView{Address: st.Settings.LocalAddress, Code: c.Code, Expires: rfc(c.Expires)}})
 }
 
-// newCode makes a code and its slow hash, with its id and its time filled in.
+// newCode makes a code and its slow hash, with its id and its time filled in. A person's own code
+// has no time: it lasts until it is changed.
 func newCode(c store.Code) store.Code {
 	c.ID = store.NewID()
 	c.Code = proof.NewCode()
@@ -344,7 +345,9 @@ func newCode(c store.Code) store.Code {
 	hashing.Lock()
 	c.K = proof.SlowHash(tidy)
 	hashing.Unlock()
-	c.Expires = time.Now().Add(codeLife)
+	if c.Kind != store.CodePerson {
+		c.Expires = time.Now().Add(codeLife)
+	}
 	return c
 }
 
@@ -437,12 +440,16 @@ func (a *App) getPeopleCode(w http.ResponseWriter, r *http.Request, s *session) 
 	case store.CodeOwn:
 		view.Title, view.CancelWord, view.Address = "Your console", "Cancel code", st.Settings.LocalAddress
 		view.Intro = "The code for my own console."
-	case store.CodeConsole:
-		view.Title, view.CancelWord = "New console code", "Cancel code"
-		view.Intro = "Here's a new LinkUp code for your console."
-		if c.Person != "" {
-			selected, view.Back = c.Person, "/people?person="+c.Person
+	case store.CodePerson:
+		p := st.Person(c.For)
+		if p == nil {
+			http.Redirect(w, r, "/people", http.StatusSeeOther)
+			return
 		}
+		view.Title, view.Expires, view.CancelURL = "Code for "+nameOf(&st, *p), "", ""
+		view.Intro = "Here's your LinkUp code. It works on each of your consoles, signed in as you."
+		view.ChangeURL = "/people/change-code?person=" + p.ID
+		selected, view.Back = p.ID, "/people?person="+p.ID
 	default:
 		view.Title, view.CancelWord, view.Who = "Invite ready", "Cancel invite", c.Note
 		view.Intro = "Let's play on CabinetOS with LinkUp."
@@ -471,65 +478,97 @@ func (a *App) postPeopleNote(w http.ResponseWriter, r *http.Request, s *session)
 	a.done(w, r, s, "/people?person="+id, "Saved")
 }
 
-func (a *App) postConsoleNewCode(w http.ResponseWriter, r *http.Request, s *session) {
-	number, err := strconv.Atoi(r.FormValue("id"))
+// postPersonCode shows someone's own code: the invite they used, or a new one for someone who came
+// in before codes worked this way. One code for each of their consoles, until it is changed.
+func (a *App) postPersonCode(w http.ResponseWriter, r *http.Request, s *session) {
 	person := r.FormValue("person")
 	st := a.Store.Snapshot()
-	if err != nil || st.ConsoleByNumber(number) == nil {
+	if st.Person(person) == nil {
 		http.Redirect(w, r, "/people", http.StatusSeeOther)
 		return
 	}
-	c, ok := a.addCode(w, r, s, store.Code{Kind: store.CodeConsole, Note: "New console code", Console: number, Person: person}, "/people")
+	if c := st.CodeOf(person); c != nil {
+		http.Redirect(w, r, "/people/code?id="+c.ID, http.StatusSeeOther)
+		return
+	}
+	c, ok := a.addCode(w, r, s, store.Code{Kind: store.CodePerson, For: person}, "/people?person="+person)
 	if ok {
-		http.Redirect(w, r, "/people/code?id="+c.ID+"&reinstall="+person, http.StatusSeeOther)
+		http.Redirect(w, r, "/people/code?id="+c.ID, http.StatusSeeOther)
 	}
 }
 
-func (a *App) getConsoleRemove(w http.ResponseWriter, r *http.Request, s *session) {
-	number, err := strconv.Atoi(query(r, "id"))
-	person := query(r, "person")
+func (a *App) getPersonConfirm(w http.ResponseWriter, r *http.Request, s *session, action, yes string) {
 	st := a.Store.Snapshot()
-	if err != nil || st.ConsoleByNumber(number) == nil {
+	p := st.Person(query(r, "person"))
+	if p == nil {
 		http.Redirect(w, r, "/people", http.StatusSeeOther)
 		return
 	}
-	back := "/people"
-	if person != "" {
-		back = "/people?person=" + person
+	name := nameOf(&st, *p)
+	v := confirmView{Action: action, ID: p.ID, Yes: yes, Back: "/people?person=" + p.ID}
+	if action == "/people/change-code" {
+		v.Question = "Change " + name + "'s code?"
+		v.Sub = "Every console " + name + " is on is signed out until the new code is typed on it."
+	} else {
+		v.Question = "Remove " + name + "?"
+		v.Sub = name + "'s friends go too, and every console " + name + " is on is signed out."
 	}
-	a.app(w, s, navView{OnPeople: true}, part{"people", a.peopleView(person)},
-		part{"confirm", confirmView{Question: "Remove " + consoleNames(&st, number) + "?", Action: "/consoles/remove", ID: strconv.Itoa(number), Yes: "Remove", Back: back}})
+	a.app(w, s, navView{OnPeople: true}, part{"people", a.peopleView(p.ID)}, part{"confirm", v})
 }
 
-func (a *App) postConsoleRemove(w http.ResponseWriter, r *http.Request, s *session) {
-	number, err := strconv.Atoi(r.FormValue("id"))
-	if err != nil {
-		http.Redirect(w, r, "/people", http.StatusSeeOther)
-		return
-	}
-	var touched, gone []string
+func (a *App) getChangeCode(w http.ResponseWriter, r *http.Request, s *session) {
+	a.getPersonConfirm(w, r, s, "/people/change-code", "Change code")
+}
+
+func (a *App) getPersonRemove(w http.ResponseWriter, r *http.Request, s *session) {
+	a.getPersonConfirm(w, r, s, "/people/remove", "Remove")
+}
+
+// signOut takes someone off every console they are on, and tells those consoles and whoever can see
+// them. With remove, they are gone too, with their friends.
+func (a *App) signOut(id string, remove bool) (gone []int, ok bool) {
+	var touched []string
 	a.saved(func(st *store.State) error {
-		c := st.ConsoleByNumber(number)
-		if c == nil {
+		if st.Person(id) == nil {
 			return nil
 		}
-		c.Removed = true
-		for _, p := range st.People {
-			if p.Console == number {
-				gone = append(gone, p.ID)
-				touched = append(touched, st.FriendsOf(p.ID)...)
-			}
-		}
-		for _, id := range gone {
+		ok = true
+		touched = append(st.FriendsOf(id), id)
+		gone = st.SignOut(id)
+		if remove {
 			st.RemovePerson(id)
 		}
-		st.Codes = slices.DeleteFunc(st.Codes, func(k store.Code) bool { return k.Kind == store.CodeConsole && k.Console == number })
 		return nil
 	})
-	a.Log.ConsoleRemoved(number)
-	a.People.ConsoleRemoved(number, gone)
+	for _, n := range gone {
+		a.Log.ConsoleRemoved(n)
+		a.People.ConsoleRemoved(n)
+	}
 	a.People.FriendsChanged(touched...)
 	a.Links.Changed()
+	return gone, ok
+}
+
+// postChangeCode gives someone a new code and signs them out of every console, which they then add
+// again with it. They keep their friends.
+func (a *App) postChangeCode(w http.ResponseWriter, r *http.Request, s *session) {
+	id := r.FormValue("id")
+	if _, ok := a.signOut(id, false); !ok {
+		http.Redirect(w, r, "/people", http.StatusSeeOther)
+		return
+	}
+	a.saved(func(st *store.State) error {
+		st.Codes = slices.DeleteFunc(st.Codes, func(c store.Code) bool { return c.Kind == store.CodePerson && c.For == id })
+		return nil
+	})
+	c, ok := a.addCode(w, r, s, store.Code{Kind: store.CodePerson, For: id}, "/people?person="+id)
+	if ok {
+		a.done(w, r, s, "/people/code?id="+c.ID, "Code changed")
+	}
+}
+
+func (a *App) postPersonRemove(w http.ResponseWriter, r *http.Request, s *session) {
+	a.signOut(r.FormValue("id"), true)
 	a.done(w, r, s, "/people", "Removed")
 }
 

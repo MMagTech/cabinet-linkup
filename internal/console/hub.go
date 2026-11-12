@@ -82,6 +82,7 @@ type Event struct {
 	Reason  string `json:"reason,omitempty"`
 	Session string `json:"session,omitempty"`
 	Sealed  string `json:"sealed,omitempty"`
+	Status  string `json:"status,omitempty"`
 }
 
 // Friend is one line of a person's list. The owner's notes are never in it.
@@ -134,23 +135,39 @@ type live struct {
 	next     int
 	heard    int  // the last event it said it has
 	silent   bool // it has gone quiet, and its friends have heard
+	// When its person last showed up here: a sign-in, or a status that is not Offline after one
+	// that was. Of a person's consoles showing them Online, the latest is where a knock rings.
+	activeAt time.Time
 	wake     chan struct{}
 }
 
 // invite is one invite, and then the session it became. Either end can be on a linked server,
 // and then its person is an id on that server and link says which server. Its id is the same on
-// both servers, made by the inviter's.
+// both servers, made by the inviter's. Each end on this server is on one console for the whole of
+// it, because the boxes are sealed for that console's key.
 type invite struct {
-	id       string
-	from, to string
-	link     string
-	fromHere bool // the inviter is on this server, and this server decides
-	sealed   string
-	expires  time.Time
-	joined   bool
-	joinedAt time.Time
-	relayed  bool // this server's relay gave out a password for it
-	reported bool
+	id                     string
+	from, to               string
+	fromConsole, toConsole int // 0 for an end on a linked server
+	link                   string
+	fromHere               bool // the inviter is on this server, and this server decides
+	sealed                 string
+	expires                time.Time
+	joined                 bool
+	joinedAt               time.Time
+	relayed                bool // this server's relay gave out a password for it
+	reported               bool
+}
+
+// consoleOf is the console a person on this server is in an invite on, or 0 if they are not in it here.
+func (inv *invite) consoleOf(person string) int {
+	switch {
+	case inv.fromHere && inv.from == person:
+		return inv.fromConsole
+	case inv.to == person && (inv.link == "" || !inv.fromHere):
+		return inv.toConsole
+	}
+	return 0
 }
 
 // remote is what a linked server last said about one of its people.
@@ -224,7 +241,7 @@ func (h *Hub) Tick() {
 			l.silent = true
 			touched[l.person] = true
 			for _, inv := range h.invites {
-				if inv.fromHere && inv.from == l.person && !inv.joined {
+				if inv.fromHere && inv.from == l.person && inv.fromConsole == l.number && !inv.joined {
 					h.endInviteLocked(inv, EndCancelled, false)
 				}
 			}
@@ -240,10 +257,10 @@ func (h *Hub) Tick() {
 				// The inviter's server says this too. A linked server that has gone away must not
 				// leave a knock on someone's list, so this server's own clock ends it as well.
 				delete(h.invites, inv.id)
-				h.pushTo(&st, inv.to, Event{Type: "invite_ended", Invite: inv.id, Reason: EndTimeout})
+				h.pushOn(inv, inv.to, Event{Type: "invite_ended", Invite: inv.id, Reason: EndTimeout})
 				h.pushTo(&st, inv.to, Event{Type: "friends"})
 			}
-		case inv.joined && (now.Sub(inv.joinedAt) > longestSession || h.silentLocked(&st, inv, now)):
+		case inv.joined && (now.Sub(inv.joinedAt) > longestSession || h.silentLocked(inv, now)):
 			h.quietEndLocked(&st, inv)
 		}
 	}
@@ -252,15 +269,14 @@ func (h *Hub) Tick() {
 	}
 }
 
-// silentLocked says whether a session's person on this server has gone quiet. The game may still be
+// silentLocked says whether a session's console on this server has gone quiet. The game may still be
 // running between the consoles, and that does not need the server.
-func (h *Hub) silentLocked(st *store.State, inv *invite, now time.Time) bool {
-	for _, id := range []string{inv.from, inv.to} {
-		p := st.Person(id)
-		if p == nil {
+func (h *Hub) silentLocked(inv *invite, now time.Time) bool {
+	for _, n := range []int{inv.fromConsole, inv.toConsole} {
+		if n == 0 {
 			continue
 		}
-		l := h.lives[p.Console]
+		l := h.lives[n]
 		if l == nil || (l.waiting == 0 && now.Sub(l.lastSeen) > sessionSilence) {
 			return true
 		}
@@ -312,6 +328,7 @@ func (h *Hub) Seen(number int) {
 	l.silent = false
 	h.mu.Unlock()
 	// After the lock: a save must not hold up everyone else's request.
+	h.touchUsed(number)
 	if person == "" {
 		return
 	}
@@ -336,18 +353,48 @@ func (h *Hub) touchSeen(person string) {
 	})
 }
 
-// statusLocked is what a person on this server is right now.
+// showingLocked says whether a console is on with this person as its current one, and not Offline.
+func (h *Hub) showingLocked(n int, id string) (*live, bool) {
+	l := h.lives[n]
+	if l == nil || l.person != id || !h.liveLocked(l, h.now()) || l.status == StatusOffline {
+		return nil, false
+	}
+	return l, true
+}
+
+// touchUsed notes when a console last asked anything, for the owner's page.
+func (h *Hub) touchUsed(number int) {
+	now := h.now()
+	h.store.Touch(func(st *store.State) bool {
+		c := st.ConsoleByNumber(number)
+		if c == nil || now.Sub(c.LastUsed) < seenEvery {
+			return false
+		}
+		c.LastUsed = now
+		return true
+	})
+}
+
+// statusLocked is what a person on this server is right now: Offline if they chose it, otherwise
+// the most of what their consoles say.
 func (h *Hub) statusLocked(st *store.State, id string) string {
 	p := st.Person(id)
-	if p == nil {
+	if p == nil || p.ChoseOffline {
 		return StatusOffline
 	}
-	l := h.lives[p.Console]
-	if l == nil || l.person != id || !h.liveLocked(l, h.now()) || l.status == StatusOffline {
-		return StatusOffline
+	on := false
+	for _, n := range p.Consoles() {
+		l, ok := h.showingLocked(n, id)
+		if !ok {
+			continue
+		}
+		if l.status == StatusLinkedUp {
+			return StatusLinkedUp
+		}
+		on = true
 	}
-	if l.status == StatusLinkedUp {
-		return StatusLinkedUp
+	if !on {
+		return StatusOffline
 	}
 	for _, inv := range h.invites {
 		if (inv.fromHere && inv.from == id) || (inv.joined && inv.link == "" && inv.to == id) || (inv.joined && !inv.fromHere && inv.to == id) {
@@ -373,7 +420,47 @@ func (h *Hub) StatusOf(id string) string {
 	return h.statusLocked(&st, id)
 }
 
-// StreamOf is the stream version a person's console last stated.
+// keyConsoleLocked is the console whose key a person's friends are given, and where a knock on them
+// rings. While they are in an invite or a session it is that one's console, because its boxes are
+// sealed for that key. Otherwise it is the one they showed up on last of those showing them Online,
+// or with none, the one they used last.
+func (h *Hub) keyConsoleLocked(p *store.Person) int {
+	invited := 0
+	for _, inv := range h.invites {
+		n := inv.consoleOf(p.ID)
+		if n == 0 {
+			continue
+		}
+		if inv.joined {
+			return n
+		}
+		invited = n
+	}
+	if invited != 0 {
+		return invited
+	}
+	best, at := p.Console, time.Time{}
+	for _, n := range p.Consoles() {
+		if l, ok := h.showingLocked(n, p.ID); ok && (at.IsZero() || l.activeAt.After(at)) {
+			best, at = n, l.activeAt
+		}
+	}
+	return best
+}
+
+// KeyConsole is the console whose key a person's friends are given, for linked servers to hear.
+func (h *Hub) KeyConsole(id string) int {
+	st := h.store.Snapshot()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	p := st.Person(id)
+	if p == nil {
+		return 0
+	}
+	return h.keyConsoleLocked(p)
+}
+
+// StreamOf is the stream version a console last stated.
 func (h *Hub) StreamOf(number int) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -403,13 +490,24 @@ func (l *live) push(e Event) {
 	}
 }
 
-// pushTo adds an event for a person, if their console is listening and they are its current one.
+// pushTo adds an event for a person, on each of their consoles that is listening with them as its
+// current one.
 func (h *Hub) pushTo(st *store.State, person string, e Event) {
 	p := st.Person(person)
 	if p == nil {
 		return
 	}
-	if l := h.lives[p.Console]; l != nil && l.person == person {
+	for _, n := range p.Consoles() {
+		if l := h.lives[n]; l != nil && l.person == person {
+			l.push(e)
+		}
+	}
+}
+
+// pushOn adds an event about an invite or a session for one person in it, on the console they are
+// in it on, if they are still its current one.
+func (h *Hub) pushOn(inv *invite, person string, e Event) {
+	if l := h.lives[inv.consoleOf(person)]; l != nil && l.person == person {
 		l.push(e)
 	}
 }
@@ -434,8 +532,9 @@ func (h *Hub) FriendsChanged(people ...string) {
 	}
 }
 
-// ConsoleRemoved tells a console it was taken off the server, and ends what it was part of.
-func (h *Hub) ConsoleRemoved(number int, people []string) {
+// ConsoleRemoved tells a console it was taken off the server, and ends what it was part of. Its
+// people's invites and sessions on other consoles carry on.
+func (h *Hub) ConsoleRemoved(number int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if l := h.lives[number]; l != nil {
@@ -443,9 +542,7 @@ func (h *Hub) ConsoleRemoved(number int, people []string) {
 		l.status = StatusOffline
 		l.push(Event{Type: "removed"})
 	}
-	for _, person := range people {
-		h.endPersonLocked(person)
-	}
+	h.endConsoleLocked(number)
 }
 
 // EndBetween ends what two people on this server have open, after their friendship was removed.
@@ -484,24 +581,28 @@ func (h *Hub) endMatching(match func(*invite) bool) {
 		delete(h.invites, inv.id)
 		h.relay.EndSession(inv.id)
 		for _, id := range []string{inv.from, inv.to} {
-			h.pushTo(&st, id, Event{Type: "invite_ended", Invite: inv.id, Reason: EndUnavailable})
+			h.pushOn(inv, id, Event{Type: "invite_ended", Invite: inv.id, Reason: EndUnavailable})
 		}
 		h.changedLocked(&st, inv.from, inv.to)
 	}
 }
 
-// endPersonLocked ends every invite and session a person is part of.
-func (h *Hub) endPersonLocked(person string) {
+// endConsoleLocked ends every invite and session on a console. A knock from it is taken back, and
+// one ringing it is unavailable, which its inviter hears.
+func (h *Hub) endConsoleLocked(number int) {
+	st := h.store.Snapshot()
 	for _, inv := range h.invites {
-		mine := (inv.fromHere && inv.from == person) || (!inv.fromHere && inv.to == person) || (inv.link == "" && inv.to == person)
-		if !mine {
-			continue
-		}
-		if inv.joined {
-			st := h.store.Snapshot()
+		switch {
+		case inv.fromConsole != number && inv.toConsole != number:
+		case inv.joined:
 			h.quietEndLocked(&st, inv)
-		} else {
+		case inv.fromConsole == number:
 			h.endInviteLocked(inv, EndCancelled, false)
+		case inv.fromHere:
+			h.endInviteLocked(inv, EndUnavailable, true)
+		default:
+			delete(h.invites, inv.id)
+			h.links.InviteEnded(inv.link, inv.id, EndUnavailable)
 		}
 	}
 }
@@ -554,47 +655,42 @@ func cleanStatus(s string) bool {
 	return s == StatusOnline || s == StatusOffline || s == StatusLinkedUp
 }
 
-// Signin makes an account the console's current one. A new account appears on the owner's page,
-// with no friends. Whoever was signed in before shows Offline.
-func (h *Hub) Signin(number int, account, username, status string) (string, error) {
+// Signin makes an account the console's current one, and says whether that person chose Offline. An
+// account new to this console and the consoles in with it appears on the owner's page, with no
+// friends. Whoever was signed in here before shows Offline, unless they are on another console.
+func (h *Hub) Signin(number int, account, username, status string) (string, bool, error) {
 	if !cleanWord(account, maxAccount) || !cleanWord(username, maxUsername) {
-		return "", ErrBadRequest
+		return "", false, ErrBadRequest
 	}
 	if status == "" {
 		status = StatusOnline
 	}
 	if !cleanStatus(status) {
-		return "", ErrBadRequest
+		return "", false, ErrBadRequest
 	}
-	id := ""
+	id, chose := "", false
 	err := h.store.Change(func(st *store.State) bool {
-		p := st.PersonByAccount(number, account)
+		p := st.PersonFor(number, account)
 		if p == nil {
-			count := 0
-			for _, x := range st.People {
-				if x.Console == number {
-					count++
-				}
-			}
-			if count >= peoplePerConsole {
+			if st.CountOn(number) >= peoplePerConsole {
 				return false
 			}
 			st.People = append(st.People, store.Person{ID: store.NewID(), Console: number, Account: account, Username: username, LastSeen: h.now()})
 			id = st.People[len(st.People)-1].ID
 			return true
 		}
-		id = p.ID
-		if p.Username == username {
-			return false
+		id, chose = p.ID, p.ChoseOffline
+		changed := p.Use(number)
+		if p.Username != username {
+			p.Username, changed = username, true
 		}
-		p.Username = username
-		return true
+		return changed
 	})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if id == "" {
-		return "", ErrBadRequest
+		return "", false, ErrBadRequest
 	}
 	h.touchSeen(id)
 	st := h.store.Snapshot()
@@ -603,13 +699,13 @@ func (h *Hub) Signin(number int, account, username, status string) (string, erro
 	l := h.liveFor(number, nil)
 	before := l.person
 	l.person, l.status = id, status
-	l.lastSeen = h.now()
+	l.lastSeen, l.activeAt = h.now(), h.now()
 	h.changedLocked(&st, id)
 	if before != "" && before != id {
 		h.changedLocked(&st, before)
-		h.endInvitesFromLocked(before)
+		h.endInvitesFromLocked(before, number)
 	}
-	return id, nil
+	return id, chose, nil
 }
 
 // Signout leaves the console with nobody current.
@@ -622,35 +718,72 @@ func (h *Hub) Signout(number int) {
 	l.person = ""
 	if before != "" {
 		h.changedLocked(&st, before)
-		h.endInvitesFromLocked(before)
+		h.endInvitesFromLocked(before, number)
 	}
 }
 
-// endInvitesFromLocked ends the invites someone sent and nobody joined: they have left the console.
-func (h *Hub) endInvitesFromLocked(person string) {
+// endInvitesFromLocked ends the invites someone sent from a console and nobody joined: they have
+// left that console.
+func (h *Hub) endInvitesFromLocked(person string, number int) {
 	for _, inv := range h.invites {
-		if inv.fromHere && inv.from == person && !inv.joined {
+		if inv.fromHere && inv.from == person && inv.fromConsole == number && !inv.joined {
 			h.endInviteLocked(inv, EndCancelled, false)
 		}
 	}
 }
 
-// SetStatus is the account's own line. A console also says Offline for its own reasons, in one word.
-func (h *Hub) SetStatus(number int, status string) error {
+// SetStatus is the account's own line on this console. A console also says Offline for its own
+// reasons, in the same word. With chosen, Online or Offline is the person's own choice, which holds
+// on every console they are on, and their other consoles hear it.
+func (h *Hub) SetStatus(number int, status string, chosen bool) error {
 	if !cleanStatus(status) {
 		return ErrBadRequest
+	}
+	h.mu.Lock()
+	l := h.liveFor(number, nil)
+	person := l.person
+	if person == "" {
+		h.mu.Unlock()
+		return ErrNoAccount
+	}
+	changed := l.status != status
+	back := l.status == StatusOffline && status != StatusOffline
+	l.status = status
+	if back {
+		l.activeAt = h.now()
+	}
+	h.mu.Unlock()
+
+	// After the lock: these write to the disk. Coming back to a console makes it the one used last.
+	choice := chosen && status != StatusLinkedUp
+	chose := false
+	if back || choice {
+		h.store.Change(func(st *store.State) bool {
+			p := st.Person(person)
+			if p == nil {
+				return false
+			}
+			moved := back && p.Use(number)
+			if choice && p.ChoseOffline != (status == StatusOffline) {
+				p.ChoseOffline, chose = status == StatusOffline, true
+			}
+			return moved || chose
+		})
+	}
+	if !changed && !chose {
+		return nil
 	}
 	st := h.store.Snapshot()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	l := h.liveFor(number, nil)
-	if l.person == "" {
-		return ErrNoAccount
+	if p := st.Person(person); p != nil && chose {
+		for _, n := range p.Consoles() {
+			if o := h.lives[n]; n != number && o != nil && o.person == person {
+				o.push(Event{Type: "chosen", Status: status})
+			}
+		}
 	}
-	if l.status != status {
-		l.status = status
-		h.changedLocked(&st, l.person)
-	}
+	h.changedLocked(&st, person)
 	return nil
 }
 
@@ -679,15 +812,15 @@ func (h *Hub) Friends(number int) ([]Friend, error) {
 		if p == nil {
 			continue
 		}
-		c := st.ConsoleByNumber(p.Console)
+		at := h.keyConsoleLocked(p)
 		f := Friend{ID: id, Username: p.Username, Server: st.Settings.Name, Status: h.statusLocked(&st, id)}
-		if c != nil {
+		if c := st.ConsoleByNumber(at); c != nil {
 			f.Key = c.Key
 		}
-		if pl := h.lives[p.Console]; pl != nil {
+		if pl := h.lives[at]; pl != nil {
 			f.Stream = pl.stream
 		}
-		f.Invite = withBox(h.inviteFromLocked(id, l.person))
+		f.Invite = withBox(h.inviteFromLocked(id, l.person, number))
 		out = append(out, f)
 	}
 	for _, link := range st.Links {
@@ -699,16 +832,17 @@ func (h *Hub) Friends(number int) ([]Friend, error) {
 			if r := h.remotes[link.ID][pair.Theirs]; r != nil && !h.behind[link.ID] {
 				f.Status = r.status
 			}
-			f.Invite = withBox(h.inviteFromLocked(pair.Theirs, l.person))
+			f.Invite = withBox(h.inviteFromLocked(pair.Theirs, l.person, number))
 			out = append(out, f)
 		}
 	}
 	return out, nil
 }
 
-func (h *Hub) inviteFromLocked(from, to string) *FriendInvite {
+// inviteFromLocked is a knock from one person to another that rings this console.
+func (h *Hub) inviteFromLocked(from, to string, number int) *FriendInvite {
 	for _, inv := range h.invites {
-		if inv.from == from && inv.to == to && !inv.joined {
+		if inv.from == from && inv.to == to && inv.toConsole == number && !inv.joined {
 			return &FriendInvite{ID: inv.id, Sealed: inv.sealed}
 		}
 	}
@@ -742,7 +876,7 @@ func (h *Hub) Invite(number int, id, friend, sealed string) (string, error) {
 		h.mu.Unlock()
 		return "", ErrUnavailable
 	}
-	inv := &invite{id: id, from: me, fromHere: true, sealed: sealed, expires: h.now().Add(inviteLife)}
+	inv := &invite{id: id, from: me, fromConsole: number, fromHere: true, sealed: sealed, expires: h.now().Add(inviteLife)}
 
 	if pairID, remoteFriend := cutPrefix(friend, "p:"); remoteFriend {
 		link, pair := findPair(&st, me, pairID)
@@ -776,9 +910,9 @@ func (h *Hub) Invite(number int, id, friend, sealed string) (string, error) {
 	if !st.AreFriends(me, friend) || h.statusLocked(&st, friend) != StatusOnline || !h.knockAllowedLocked(me, friend) {
 		return "", ErrUnavailable
 	}
-	inv.to = friend
+	inv.to, inv.toConsole = friend, h.keyConsoleLocked(st.Person(friend))
 	h.invites[id] = inv
-	h.pushTo(&st, friend, Event{Type: "invite", Invite: id, From: me, Sealed: sealed})
+	h.pushOn(inv, friend, Event{Type: "invite", Invite: id, From: me, Sealed: sealed})
 	h.changedLocked(&st, me)
 	return id, nil
 }
@@ -821,8 +955,7 @@ func (h *Hub) partOf(number int, id string) (*invite, string, error) {
 	if inv == nil {
 		return nil, l.person, ErrUnavailable
 	}
-	here := (inv.fromHere && inv.from == l.person) || (!inv.fromHere && inv.to == l.person) || (inv.fromHere && inv.link == "" && inv.to == l.person)
-	if !here {
+	if inv.consoleOf(l.person) != number {
 		return nil, l.person, ErrNotYours
 	}
 	return inv, l.person, nil
@@ -834,16 +967,16 @@ func (h *Hub) endInviteLocked(inv *invite, reason string, tellInviter bool) {
 	st := h.store.Snapshot()
 	delete(h.invites, inv.id)
 	if inv.fromHere && tellInviter {
-		h.pushTo(&st, inv.from, Event{Type: "invite_ended", Invite: inv.id, Reason: reason})
+		h.pushOn(inv, inv.from, Event{Type: "invite_ended", Invite: inv.id, Reason: reason})
 	}
 	if inv.link == "" {
 		if reason != EndDeclined {
-			h.pushTo(&st, inv.to, Event{Type: "invite_ended", Invite: inv.id, Reason: reason})
+			h.pushOn(inv, inv.to, Event{Type: "invite_ended", Invite: inv.id, Reason: reason})
 		}
 	} else if inv.fromHere {
 		h.links.InviteEnded(inv.link, inv.id, reason)
 	} else if reason != EndDeclined {
-		h.pushTo(&st, inv.to, Event{Type: "invite_ended", Invite: inv.id, Reason: reason})
+		h.pushOn(inv, inv.to, Event{Type: "invite_ended", Invite: inv.id, Reason: reason})
 	}
 	h.relay.EndSession(inv.id)
 	h.changedLocked(&st, inv.from)
@@ -934,7 +1067,7 @@ func (h *Hub) Join(number int, id string) (string, error) {
 		}
 	}
 	if inv.fromHere {
-		h.pushTo(&st, inv.from, Event{Type: "joined", Session: id})
+		h.pushOn(inv, inv.from, Event{Type: "joined", Session: id})
 	}
 	h.changedLocked(&st, me, inv.from)
 	return id, nil
@@ -945,7 +1078,6 @@ func (h *Hub) Signal(number int, id, sealed string) error {
 	if sealed == "" || len(sealed) > maxSignalBox {
 		return ErrBadRequest
 	}
-	st := h.store.Snapshot()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	inv, me, err := h.partOf(number, id)
@@ -963,7 +1095,7 @@ func (h *Hub) Signal(number int, id, sealed string) error {
 		h.links.Signal(inv.link, id, sealed)
 		return nil
 	}
-	h.pushTo(&st, other, Event{Type: "signal", Session: id, Sealed: sealed})
+	h.pushOn(inv, other, Event{Type: "signal", Session: id, Sealed: sealed})
 	return nil
 }
 
@@ -993,10 +1125,10 @@ func (h *Hub) endSessionLocked(inv *invite, by string) {
 		h.links.End(inv.link, inv.id)
 		if st.Person(by) == nil {
 			// The other server ended it: tell the one on this side.
-			h.pushTo(&st, other, Event{Type: "session_ended", Session: inv.id})
+			h.pushOn(inv, other, Event{Type: "session_ended", Session: inv.id})
 		}
 	} else {
-		h.pushTo(&st, other, Event{Type: "session_ended", Session: inv.id})
+		h.pushOn(inv, other, Event{Type: "session_ended", Session: inv.id})
 	}
 	h.relay.EndSession(inv.id)
 	h.changedLocked(&st, inv.from, inv.to)
@@ -1097,37 +1229,27 @@ func (h *Hub) localRelay(id string) (*relay.Credentials, string) {
 	return &c, ""
 }
 
-// Leave takes the console and its accounts off the server, on its own word.
+// Leave takes the console off the server, on its own word, and its accounts that are on no other
+// console.
 func (h *Hub) Leave(number int) error {
-	var gone []string
+	touched := []string{}
 	err := h.store.Update(func(st *store.State) error {
 		for _, p := range st.People {
-			if p.Console == number {
-				gone = append(gone, p.ID)
+			if p.On(number) {
+				touched = append(append(touched, p.ID), st.FriendsOf(p.ID)...)
 			}
 		}
+		st.RemoveConsole(number)
 		st.Consoles = slices.DeleteFunc(st.Consoles, func(c store.Console) bool { return c.Number == number })
-		st.Codes = slices.DeleteFunc(st.Codes, func(c store.Code) bool { return c.Kind == store.CodeConsole && c.Console == number })
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	st := h.store.Snapshot()
 	h.mu.Lock()
-	touched := []string{}
-	for _, id := range gone {
-		touched = append(touched, st.FriendsOf(id)...)
-		h.endPersonLocked(id)
-	}
+	h.endConsoleLocked(number)
 	delete(h.lives, number)
 	h.mu.Unlock()
-	h.store.Update(func(s *store.State) error {
-		for _, id := range gone {
-			s.RemovePerson(id)
-		}
-		return nil
-	})
 	h.log.ConsoleRemoved(number)
 	h.FriendsChanged(touched...)
 	h.mu.Lock()
@@ -1244,8 +1366,9 @@ func (h *Hub) RemoteInvite(link, id, from, to, sealed string) error {
 			pairID = p.ID
 		}
 	}
-	h.invites[id] = &invite{id: id, from: from, to: to, link: link, sealed: sealed, expires: h.now().Add(inviteLife)}
-	h.pushTo(&st, to, Event{Type: "invite", Invite: id, From: "p:" + pairID, Sealed: sealed})
+	inv := &invite{id: id, from: from, to: to, toConsole: h.keyConsoleLocked(st.Person(to)), link: link, sealed: sealed, expires: h.now().Add(inviteLife)}
+	h.invites[id] = inv
+	h.pushOn(inv, to, Event{Type: "invite", Invite: id, From: "p:" + pairID, Sealed: sealed})
 	h.pushTo(&st, to, Event{Type: "friends"})
 	return nil
 }
@@ -1264,10 +1387,10 @@ func (h *Hub) RemoteInviteEnded(link, id, reason string) {
 	}
 	delete(h.invites, id)
 	if inv.fromHere {
-		h.pushTo(&st, inv.from, Event{Type: "invite_ended", Invite: id, Reason: reason})
+		h.pushOn(inv, inv.from, Event{Type: "invite_ended", Invite: id, Reason: reason})
 		h.changedLocked(&st, inv.from)
 	} else {
-		h.pushTo(&st, inv.to, Event{Type: "invite_ended", Invite: id, Reason: reason})
+		h.pushOn(inv, inv.to, Event{Type: "invite_ended", Invite: id, Reason: reason})
 		h.pushTo(&st, inv.to, Event{Type: "friends"})
 	}
 	h.relay.EndSession(id)
@@ -1288,14 +1411,13 @@ func (h *Hub) RemoteJoin(link, id string) error {
 		return nil
 	}
 	inv.joined, inv.joinedAt = true, h.now()
-	h.pushTo(&st, inv.from, Event{Type: "joined", Session: id})
+	h.pushOn(inv, inv.from, Event{Type: "joined", Session: id})
 	h.changedLocked(&st, inv.from)
 	return nil
 }
 
 // RemoteSignal is sealed connection details from the other server's console.
 func (h *Hub) RemoteSignal(link, id, sealed string) {
-	st := h.store.Snapshot()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	inv := h.invites[id]
@@ -1306,7 +1428,7 @@ func (h *Hub) RemoteSignal(link, id, sealed string) {
 	if !inv.fromHere {
 		here = inv.to
 	}
-	h.pushTo(&st, here, Event{Type: "signal", Session: id, Sealed: sealed})
+	h.pushOn(inv, here, Event{Type: "signal", Session: id, Sealed: sealed})
 }
 
 // RemoteEnd is a session ended on the other server.
@@ -1323,7 +1445,7 @@ func (h *Hub) RemoteEnd(link, id string) {
 	if !inv.fromHere {
 		here = inv.to
 	}
-	h.pushTo(&st, here, Event{Type: "session_ended", Session: id})
+	h.pushOn(inv, here, Event{Type: "session_ended", Session: id})
 	h.relay.EndSession(id)
 	h.changedLocked(&st, here)
 }

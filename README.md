@@ -136,10 +136,12 @@ else asks only you.
 address, a code and the day it expires. Send it however you like; the server sends nothing. The person
 types both on their console, and **the account signed in at that moment becomes the friend**. If that
 was the wrong account, you do not need a new code: on People, remove the friend from that account, add
-the right one once it has signed in on that console, and move your note.
+the right one once it has signed in on that console, and move your note. If it is the very account the
+invite was for, that console joins them instead, as their own code does.
 
-A code works once, and stops after 7 days. Whoever uses it first takes the place, so if a stranger
-ever uses one you will see their username on People, and can remove them.
+An invite stops after 7 days if nobody uses it. Whoever uses it first takes the place, and from then
+on it works only for them, so if a stranger ever uses one you will see their username on People, and
+can remove them.
 
 **A second account on a console** appears on People the first time it signs in, with no friends. Add
 friends on its page.
@@ -147,8 +149,25 @@ friends on its page.
 **Only you make friends.** Two people on your server are friends only if you add them. A child's
 account sees only its own friends, and those friends see nobody else.
 
-**A reinstall:** New console code, on that person's page. The console pairs again, and each account
-gets its friends back when it signs in.
+**Each person's own code** is the invite they used: the same letters, shown again under Their code
+on their page. It works on every console signed in as them, as often as they need, and lasts until
+you change it. An invite nobody has used still stops after 7 days. They are one person on all of those consoles,
+shown once on People, with the same friends, and a console added this way also knows anyone already
+on their other consoles. A game invite rings the console they used last, and Offline chosen on one
+holds on all of them. Their page lists their consoles, with when each was added and last used.
+
+**A reinstall:** type that person's code on the console again, and they are back with their friends.
+The console as it was before stays on their list, with its old last used day, until you change their
+code.
+
+**Change code,** on their code, if it got out or a console was sold: they are signed out of every
+console, keep their friends, and type the new code on the consoles they still have. Anyone else on
+those consoles comes back with it.
+
+**Remove,** on their page, takes them off with their friends, and signs out every console they are on.
+
+**Someone who shows twice,** because their second console was paired before consoles joined up: on
+the second one's page, Remove. Then type the first one's code on that console.
 
 ## Linked servers
 
@@ -247,7 +266,7 @@ copying it while the server runs is safe. Unraid's appdata backup should cover t
 tried. A backup holds the server's key, so keep it private.
 
 To restore, stop the container, put the folder back and start it. The server's key is in there, so consoles
-stay paired. You lose what changed since the backup: a console paired after it needs a New console code, and
+stay paired. You lose what changed since the backup: a console paired after it needs its person's code again, and
 friends added since are gone. Losing the folder with no backup means every console pairs again and every link
 is redone. No game or save is ever at risk.
 
