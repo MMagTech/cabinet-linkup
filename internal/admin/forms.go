@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/MMagTech/cabinet-linkup/internal/logfile"
 	"github.com/MMagTech/cabinet-linkup/internal/proof"
 	"github.com/MMagTech/cabinet-linkup/internal/relay"
 	"github.com/MMagTech/cabinet-linkup/internal/store"
+	"github.com/MMagTech/cabinet-linkup/internal/text"
 )
 
 const (
@@ -46,19 +46,15 @@ func (a *App) saved(change func(*store.State) error) error {
 	return err
 }
 
-// plainText says whether free text holds nothing that could break a line: an address or a name
-// is only ever shown and handed out, but it is still one line.
-func plainText(s string) bool {
-	return utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
-}
-
+// checkName and checkAddress hold free text to one line: an address or a name is only ever shown
+// and handed out, and a linked server refuses a name with a hidden character in it.
 func checkName(name string) string {
 	switch {
 	case name == "":
 		return wordRequired
 	case utf8.RuneCountInString(name) > store.MaxNameLength:
 		return wordTooLong
-	case !plainText(name):
+	case !text.Plain(name):
 		return wordInvalid
 	}
 	return ""
@@ -70,7 +66,7 @@ func checkAddress(address string) string {
 		return wordRequired
 	case len(address) > maxAddress:
 		return wordTooLong
-	case !plainText(address):
+	case !text.Plain(address):
 		return wordInvalid
 	}
 	return ""
@@ -418,7 +414,7 @@ func (a *App) postPeopleAdd(w http.ResponseWriter, r *http.Request, s *session) 
 // what did not come through the field.
 func noteText(r *http.Request) string {
 	note := strings.Map(func(c rune) rune {
-		if unicode.IsControl(c) {
+		if text.Hidden(c) {
 			return -1
 		}
 		return c

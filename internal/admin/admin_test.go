@@ -558,6 +558,7 @@ func TestServerForm(t *testing.T) {
 	r.setUp()
 	shows(t, r.post("/server/about", "name", "", "address", "new:1"), "Required", `value="new:1"`)
 	shows(t, r.post("/server/about", "name", "x", "address", "bad\nline"), "Not valid")
+	shows(t, r.post("/server/about", "name", "Ours\u202e", "address", "new:1"), "Not valid")
 	for _, address := range []string{"linkup.example.net:7845", "203.0.113.5:7845", "[2001:db8::1]:7845", "linkup.example.net", "https://proxy.example.net/linkup", "name.tailnet.ts.net:7845", "100.100.1.2:7845"} {
 		goesTo(t, r.post("/server/about", "name", "Ours", "address", address), "/server")
 		r.store.View(func(st *store.State) {
