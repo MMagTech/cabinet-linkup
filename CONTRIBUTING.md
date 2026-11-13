@@ -68,7 +68,9 @@ There is one branch, `main`. An image's tag is its channel:
 | `:latest` and `:<version>` | On a `v*` tag | Owners. The compose files and the Unraid template follow `:latest` |
 | `:testing` | On every push to `main`, once Checks pass | The maintainer's own server, before a release |
 
-`.github/workflows/release.yml` builds and signs both, and nothing else publishes. A `:testing` server's
+`.github/workflows/release.yml` builds and signs both, and nothing else publishes. It pushes the image
+with no tag, signs it and checks the signature, and only then moves the tag to it, so a failure leaves
+the tag on the last image that was signed and checked. A `:testing` server's
 version is `testing-` and the commit's first seven characters, on the Server tab and in the log, and it
 shows no update notice. When pushes land close together, only the newest becomes `:testing`.
 

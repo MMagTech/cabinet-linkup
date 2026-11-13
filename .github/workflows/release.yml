@@ -3,6 +3,12 @@
 #
 # A version tag publishes the release, :<version> and :latest, which owners follow. Every push to
 # main publishes :testing once its Checks pass, for trying what is next before it is tagged.
+#
+# THE TAGS MOVE LAST, TO A SIGNED AND CHECKED IMAGE. The image is pushed with no tag, signed, and
+# its signature checked against this workflow's own identity. Only then does each tag move to it,
+# and each is read back. A failure at any step leaves every tag where it was, on an image that was
+# signed and checked. This is CabinetOS's lesson, in CabinetOS's docs/lessons/image-and-ci.md:
+# "THE CHANNEL TAG MOVES LAST, TO A SIGNED AND CHECKED DIGEST".
 name: Release
 
 on:
@@ -40,7 +46,7 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             version="${GITHUB_REF_NAME#v}"
             commit="$GITHUB_SHA"
-            tags="$image:$version,$image:latest"
+            tags="$version latest"
             queue="$version"
           else
             newest="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
@@ -50,7 +56,7 @@ jobs:
             fi
             version="testing-${TESTED:0:7}"
             commit="$TESTED"
-            tags="$image:testing"
+            tags=testing
             queue=testing
           fi
           {
@@ -83,16 +89,62 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Pushed by its digest alone: no tag names it until it is signed and checked.
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
           build-args: VERSION=${{ needs.plan.outputs.version }}
-          tags: ${{ needs.plan.outputs.tags }}
+          outputs: type=image,name=${{ needs.plan.outputs.image }},push-by-digest=true,name-canonical=true,push=true
       - name: Sign
         env:
           IMAGE: ${{ needs.plan.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
+      # As an owner checks it (README.md, "Updating"), but held to this workflow at this ref rather
+      # than anything in the repository: release.yml@refs/heads/main for :testing, and
+      # release.yml@refs/tags/v<version> for a release.
+      - name: Check the signature
+        env:
+          IMAGE: ${{ needs.plan.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IDENTITY: https://github.com/${{ github.workflow_ref }}
+        run: |
+          cosign verify \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE@$DIGEST" > /dev/null
+          echo "$IMAGE@$DIGEST is signed by $IDENTITY"
+      # Copied by digest inside the registry, not pushed again, so each tag names exactly the bytes
+      # that were signed and checked, and read back, not assumed. :testing moves only while its
+      # commit is still main's newest, so a run that waited its turn cannot take it back.
+      - name: Move the tags to the signed image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.plan.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ needs.plan.outputs.tags }}
+          COMMIT: ${{ needs.plan.outputs.commit }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$TAGS" = testing ]; then
+            newest="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+            if [ "$newest" != "$COMMIT" ]; then
+              echo "main has moved on since this commit, so :testing waits for the newer run"
+              exit 0
+            fi
+          fi
+          creds="$REGISTRY_USER:$REGISTRY_TOKEN"
+          for tag in $TAGS; do
+            skopeo copy --all --preserve-digests --src-creds "$creds" --dest-creds "$creds" \
+              "docker://$IMAGE@$DIGEST" "docker://$IMAGE:$tag"
+            now="sha256:$(skopeo inspect --raw --creds "$creds" "docker://$IMAGE:$tag" | sha256sum | cut -d' ' -f1)"
+            if [ "$now" != "$DIGEST" ]; then
+              echo "::error::$IMAGE:$tag is $now, not the signed $DIGEST"
+              exit 1
+            fi
+            echo ":$tag is $DIGEST, signed and checked" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
