@@ -60,7 +60,8 @@ type Console struct {
 // last, and Others the rest: a console joins someone with their code, or an invite made
 // for them, used by their own account. Console is 0 while they are signed out of every
 // console. ChoseOffline is the person's own Offline, which holds on all of them; a
-// console's own reasons for Offline are not here.
+// console's own reasons for Offline are not here. JoinsOnly is an account of an app that
+// only joins and never hosts, as 2P Start: it said so at pairing or its last sign-in.
 type Person struct {
 	ID           string
 	Console      int
@@ -70,6 +71,13 @@ type Person struct {
 	Note         string
 	LastSeen     time.Time
 	ChoseOffline bool `json:",omitempty"`
+	JoinsOnly    bool `json:",omitempty"`
+}
+
+// CanPlay says whether two people could ever play together. One of them has to host, so two
+// who only join cannot, and are never made friends.
+func CanPlay(a, b *Person) bool {
+	return !a.JoinsOnly || !b.JoinsOnly
 }
 
 // On says whether a person is on a console.

@@ -3,6 +3,7 @@ package console
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -87,6 +88,23 @@ func TestFailedPairingsKeepOnlyWhatTheLimitsNeed(t *testing.T) {
 	for _, list := range h.tries {
 		if len(list) > triesPerAddress+1 {
 			t.Fatalf("a source keeps %d times", len(list))
+		}
+	}
+}
+
+// Only hosts false marks an app that only joins: missing, as every console sends it, hosts.
+func TestHostsFalseIsTheOnlyJoinsOnly(t *testing.T) {
+	for raw, want := range map[string]bool{`{}`: false, `{"hosts":true}`: false, `{"hosts":false}`: true, `{"hosts":null}`: false} {
+		var q request
+		if err := json.Unmarshal([]byte(raw), &q); err != nil {
+			t.Fatal(err)
+		}
+		var j consoleJoining
+		if err := json.Unmarshal([]byte(raw), &j); err != nil {
+			t.Fatal(err)
+		}
+		if joinsOnly(q.Hosts) != want || joinsOnly(j.Hosts) != want {
+			t.Errorf("%s: want %v", raw, want)
 		}
 	}
 }

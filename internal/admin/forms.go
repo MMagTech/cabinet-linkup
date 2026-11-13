@@ -375,7 +375,7 @@ type peopleAddView struct {
 func (a *App) getPeopleAdd(w http.ResponseWriter, _ *http.Request, s *session) {
 	st := a.Store.Snapshot()
 	a.app(w, s, navView{OnPeople: true}, part{"people", a.peopleView("")},
-		part{"people-add", peopleAddView{Back: "/people", Accounts: accountOptions(&st, nil)}})
+		part{"people-add", peopleAddView{Back: "/people", Accounts: accountOptions(&st, joinsOnly)}})
 }
 
 func (a *App) addCode(w http.ResponseWriter, r *http.Request, s *session, c store.Code, back string) (store.Code, bool) {
@@ -399,9 +399,14 @@ func (a *App) postPeopleAdd(w http.ResponseWriter, r *http.Request, s *session) 
 	note := noteText(r)
 	forID := r.FormValue("for")
 	st := a.Store.Snapshot()
-	if len(st.People) > 0 && st.Person(forID) == nil {
-		http.Redirect(w, r, "/people/add", http.StatusSeeOther)
-		return
+	// An invite is someone's who can host, while there is anyone who can: a friend who only joins
+	// could never play with whoever uses it from 2P Start.
+	if f := st.Person(forID); f == nil || f.JoinsOnly {
+		if len(accountOptions(&st, joinsOnly)) > 0 {
+			http.Redirect(w, r, "/people/add", http.StatusSeeOther)
+			return
+		}
+		forID = ""
 	}
 	c, ok := a.addCode(w, r, s, store.Code{Kind: store.CodeInvite, Note: note, For: forID}, "/people")
 	if ok {
@@ -576,7 +581,7 @@ func (a *App) postFriendAdd(w http.ResponseWriter, r *http.Request, s *session) 
 	person, friend := r.FormValue("person"), r.FormValue("friend")
 	added := false
 	a.saved(func(st *store.State) error {
-		if st.Person(person) != nil && st.Person(friend) != nil && person != friend {
+		if p, f := st.Person(person), st.Person(friend); p != nil && f != nil && person != friend && store.CanPlay(p, f) {
 			st.AddFriends(person, friend)
 			added = true
 		}

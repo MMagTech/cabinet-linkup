@@ -145,7 +145,9 @@ can remove them.
 
 **A friend with no console** types the invite into
 [2P Start](https://github.com/MMagTech/cabinet-linkup-guest), an app for a Mac or a Windows PC that
-joins a game and never hosts one. The name they type there is the username you see.
+joins a game and never hosts one. The name they type there is the username you see, with 2P Start
+under it. Two 2P Start people could never play each other, so People does not offer them to each other
+as friends, and Invite's whose friend lists only people with a console.
 
 **A second account on a console** appears on People the first time it signs in, with no friends. Add
 friends on its page.
