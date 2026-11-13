@@ -17,7 +17,7 @@ nobody can promise it has no holes. Keep it up to date, and read [What it holds]
 |---|---|---|
 | ![First run: the owner sets the password](docs/media/admin-first-run-phone.webp) | ![People: three people and an invite waiting](docs/media/admin-people-phone.webp) | ![Relay: the one line to forward on the router](docs/media/admin-relay-phone.webp) |
 
-![People on a computer, with one person's friends beside the list](docs/media/admin-people.webp)
+![People on a computer, with one person's friends and consoles beside the list](docs/media/admin-people.webp)
 
 Playing happens on the console. The player's guide is
 [LinkUp on CabinetOS's wiki](https://cabinetos.mmagtech.com/wiki/linkup.html).
