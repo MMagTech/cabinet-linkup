@@ -703,16 +703,18 @@ something.
 
 - **A drop** is 2 seconds with nothing heard. Under that, nothing shows: the friend's last state holds,
   and lost packets are resent.
-- **Back** is anything heard again. The host then sends a full picture, and `picture:1` or `picture:0`
-  again. On a new connection that word can go before `control` is open, and be lost, so a friend keeps
-  the last `picture:` it heard.
-- **A new connection** is only ever the host's to make. After 8 seconds with nothing heard, and then at
-  most every 15 seconds while it lasts, the host makes a fresh connection for the same game, raises `g`
+- **Back** is anything heard again on the connection in use. A new connection counts only once
+  something arrives on it.
+- **Each time `control` opens,** on the first connection and on every new one, the host sends
+  `picture:1` or `picture:0` and a full picture. A word sent before `control` is open is lost, and until
+  this one arrives a friend keeps the last `picture:` it heard.
+- **A new connection** is only ever the host's to make. After 8 seconds with nothing heard, and then
+  every 15 seconds while nothing arrives on the newest, the host makes a fresh connection for the same game, raises `g`
   by one, and sends a new offer and new candidates under it. A friend that gets a piece with a higher
   `g` than its own drops its connection, makes a new one, and answers under that `g`. Either side drops
   a piece under a lower `g` than its own. The hello is not sent again, and the codec stays the same.
-- **Giving up** is the friend's. After a minute of drop, CabinetOS's friend sends `end`, and the
-  host hears `session_ended`.
+- **Giving up** is each console's own. After a minute of drop, CabinetOS ends the session on its side,
+  host or friend, and sends `end`, so the other hears `session_ended` if it is still there.
 
 ### Goodbye
 
