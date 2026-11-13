@@ -29,7 +29,7 @@ type option struct {
 
 type personView struct {
 	ID, Name, Note, Letter, LastSeen string
-	Console                          string // their consoles, or which console for a login another person has too
+	Console                          string // 2P Start, their consoles, or which console for a login another person has too
 	Tint                             int
 	Online, Current                  bool
 	Friends                          []friendView
@@ -182,13 +182,26 @@ func consolesText(st *store.State, p store.Person) string {
 	return strconv.Itoa(len(on)) + " consoles"
 }
 
-// countLine is the line under a person's name: how many consoles they are on when it is not one,
-// or which one when another person has the same name, or "".
+// countLine is the line under a person's name: "2P Start" for someone on an app that only joins,
+// then how many consoles they are on when it is not one, or which one when another person has the
+// same name, or "".
 func countLine(st *store.State, p store.Person) string {
+	line := consoleLine(st, p)
 	if len(signedIn(st, p)) != 1 {
-		return consolesText(st, p)
+		line = consolesText(st, p)
 	}
-	return consoleLine(st, p)
+	switch {
+	case !p.JoinsOnly:
+		return line
+	case line == "":
+		return "2P Start"
+	}
+	return "2P Start · " + line
+}
+
+// joinsOnly picks out the people who never host, for a pick that needs someone who can.
+func joinsOnly(p store.Person) bool {
+	return p.JoinsOnly
 }
 
 // consoleLine is the line under a person's name that tells them apart, or "".
@@ -245,7 +258,9 @@ func (a *App) person(st *store.State, p store.Person, selected string) personVie
 			}
 		}
 	}
-	v.CanAdd = accountOptions(st, func(o store.Person) bool { return o.ID == p.ID || st.AreFriends(o.ID, p.ID) })
+	v.CanAdd = accountOptions(st, func(o store.Person) bool {
+		return o.ID == p.ID || st.AreFriends(o.ID, p.ID) || !store.CanPlay(&o, &p)
+	})
 	return v
 }
 

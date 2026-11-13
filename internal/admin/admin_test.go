@@ -1022,3 +1022,57 @@ func TestOnePersonOnTwoConsoles(t *testing.T) {
 	}
 	shows(t, r.get("/people?person=a1"), "No consoles", "Signed out of every console")
 }
+
+// Two people on 2P Start could never play, so neither is offered to the other, the friend form
+// refuses them, and an invite is only for someone with a console. People says who is on 2P Start.
+func TestTwoOn2PStartAreNotOfferedToEachOther(t *testing.T) {
+	r := newRig(t)
+	r.setUp()
+	r.fill()
+	r.store.Update(func(st *store.State) error {
+		st.Consoles = append(st.Consoles, store.Console{Number: 4}, store.Console{Number: 5})
+		st.People = append(st.People,
+			store.Person{ID: "g1", Console: 4, Account: "x", Username: "riley", Note: "Danny's friend", JoinsOnly: true},
+			store.Person{ID: "g2", Console: 5, Account: "y", Username: "sam", JoinsOnly: true})
+		return nil
+	})
+	shows(t, r.get("/people"), `<span class="item-sub">2P Start · Danny&#39;s friend</span>`, `<span class="item-sub">2P Start</span>`)
+	sam := r.get("/people?person=g2")
+	shows(t, sam, "Last seen", " · 2P Start</p>", `<option value="a3">alex</option>`)
+	if strings.Contains(sam.Body.String(), `<option value="g1">`) {
+		t.Error("riley is not offered to sam")
+	}
+	shows(t, r.get("/people?person=a3"), `<option value="g1">riley</option>`, `<option value="g2">sam</option>`)
+	goesTo(t, r.post("/friends/add", "person", "g2", "friend", "g1"), "/people?person=g2")
+	r.store.View(func(st *store.State) {
+		if st.AreFriends("g1", "g2") {
+			t.Error("the form refuses two on 2P Start")
+		}
+	})
+	add := r.get("/people/add").Body.String()
+	if strings.Contains(add, `value="g1"`) || strings.Contains(add, `value="g2"`) || !strings.Contains(add, `<option value="a3">alex</option>`) {
+		t.Errorf("Friend of lists only people with a console:\n%s", add)
+	}
+	goesTo(t, r.post("/people/add", "note", "x", "for", "g1"), "/people/add")
+}
+
+// A server with only 2P Start people still makes an invite, for nobody's friend.
+func TestAnInviteWithOnly2PStartPeople(t *testing.T) {
+	r := newRig(t)
+	r.setUp()
+	r.store.Update(func(st *store.State) error {
+		st.Consoles = []store.Console{{Number: 1}}
+		st.People = []store.Person{{ID: "g1", Console: 1, Account: "x", Username: "riley", JoinsOnly: true}}
+		return nil
+	})
+	if strings.Contains(r.get("/people/add").Body.String(), "Friend of") {
+		t.Error("nobody to pick")
+	}
+	goesTo(t, r.post("/people/add", "note", "x", "for", "g1"), "/people/code?id="+r.newestCode())
+	id := r.newestCode()
+	r.store.View(func(st *store.State) {
+		if c := st.Code(id); c.For != "" {
+			t.Errorf("for nobody, not %q", c.For)
+		}
+	})
+}

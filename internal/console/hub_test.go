@@ -73,7 +73,7 @@ func (r *hubRig) console(number int, username string) string {
 		return nil
 	})
 	r.h.Connected(number, []byte{byte(number)}, 1)
-	id, _, err := r.h.Signin(number, username, username, StatusOnline)
+	id, _, err := r.h.Signin(number, username, username, StatusOnline, false)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestAKidSeesOnlyTheirOwnFriends(t *testing.T) {
 	alex := r.console(2, "alex")
 	theo := r.console(3, "theo")
 	r.friends(parent, alex)
-	kid, _, err := r.h.Signin(1, "kid", "kid", StatusOnline)
+	kid, _, err := r.h.Signin(1, "kid", "kid", StatusOnline, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestAKidSeesOnlyTheirOwnFriends(t *testing.T) {
 	if len(list) != 1 || list[0].ID != theo {
 		t.Errorf("the kid sees %+v", list)
 	}
-	r.h.Signin(1, "parent", "parent", StatusOnline)
+	r.h.Signin(1, "parent", "parent", StatusOnline, false)
 	list, _ = r.h.Friends(1)
 	if len(list) != 1 || list[0].ID != alex {
 		t.Errorf("the parent sees %+v", list)
@@ -162,7 +162,7 @@ func TestTwoFriendsOfOnePersonDoNotSeeEachOther(t *testing.T) {
 func TestANewAccountAppearsWithNoFriends(t *testing.T) {
 	r := newHubRig(t)
 	r.console(1, "parent")
-	id, _, err := r.h.Signin(1, "second", "second", StatusOnline)
+	id, _, err := r.h.Signin(1, "second", "second", StatusOnline, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestANewAccountAppearsWithNoFriends(t *testing.T) {
 func TestSameAccountKeepsItsPersonAndLastUsername(t *testing.T) {
 	r := newHubRig(t)
 	id := r.console(1, "alex")
-	again, _, err := r.h.Signin(1, "alex", "alexander", StatusOnline)
+	again, _, err := r.h.Signin(1, "alex", "alexander", StatusOnline, false)
 	if err != nil || again != id {
 		t.Fatalf("%v %v", again, err)
 	}
@@ -192,12 +192,12 @@ func TestSigninRefusesNonsense(t *testing.T) {
 	r := newHubRig(t)
 	r.console(1, "a")
 	for _, c := range [][3]string{{"", "x", ""}, {"x", "", ""}, {"x", "bad\nname", ""}, {"x", "y", "weird"}} {
-		if _, _, err := r.h.Signin(1, c[0], c[1], c[2]); !errors.Is(err, ErrBadRequest) {
+		if _, _, err := r.h.Signin(1, c[0], c[1], c[2], false); !errors.Is(err, ErrBadRequest) {
 			t.Errorf("%q: %v", c, err)
 		}
 	}
 	for i := range peoplePerConsole + 2 {
-		r.h.Signin(1, string(rune('A'+i)), "n", StatusOnline)
+		r.h.Signin(1, string(rune('A'+i)), "n", StatusOnline, false)
 	}
 	st := r.st.Snapshot()
 	if len(st.People) > peoplePerConsole {
@@ -223,20 +223,20 @@ func TestStatusShowsOfflineForEveryReason(t *testing.T) {
 		t.Error("one press brings them back")
 	}
 
-	other, _, _ := r.h.Signin(2, "other", "other", StatusOnline)
+	other, _, _ := r.h.Signin(2, "other", "other", StatusOnline, false)
 	if got := statusOf(t, r.h, 1, b); got != StatusOffline {
 		t.Error("someone else signed in on their console")
 	}
 	if !r.h.Online(other) || r.h.Online(b) {
 		t.Error("the page must agree")
 	}
-	r.h.Signin(2, "b", "b", StatusOnline)
+	r.h.Signin(2, "b", "b", StatusOnline, false)
 
 	r.h.Signout(2)
 	if got := statusOf(t, r.h, 1, b); got != StatusOffline {
 		t.Error("signed out")
 	}
-	r.h.Signin(2, "b", "b", StatusOnline)
+	r.h.Signin(2, "b", "b", StatusOnline, false)
 
 	r.advance(consoleSilence + time.Second)
 	r.h.Seen(1)
@@ -251,7 +251,7 @@ func TestStatusIsOneAccountsOwn(t *testing.T) {
 	alex := r.console(2, "alex")
 	r.friends(r.st.Snapshot().People[0].ID, alex)
 	r.h.SetStatus(2, StatusOffline, false)
-	kid, _, _ := r.h.Signin(2, "kid", "kid", StatusOnline)
+	kid, _, _ := r.h.Signin(2, "kid", "kid", StatusOnline, false)
 	if !r.h.Online(kid) {
 		t.Error("one account appearing offline holds for it and not another")
 	}
@@ -617,9 +617,9 @@ func TestRemovingAConsoleMidGame(t *testing.T) {
 	r := newHubRig(t)
 	a := r.console(1, "a")
 	b := r.console(2, "b")
-	other, _, _ := r.h.Signin(2, "other", "other", StatusOnline)
+	other, _, _ := r.h.Signin(2, "other", "other", StatusOnline, false)
 	r.friends(a, other)
-	r.h.Signin(2, "b", "b", StatusOnline)
+	r.h.Signin(2, "b", "b", StatusOnline, false)
 	r.friends(a, b)
 	id, _ := r.h.Invite(1, newInviteID(), b, "s")
 	r.h.Join(2, id)
@@ -1269,7 +1269,7 @@ func TestSigningInAgainDoesNotSave(t *testing.T) {
 	r.st.ReadJSON("state.json", &before)
 	before.Games.Direct = 12345
 	r.st.WriteJSON("state.json", &before)
-	r.h.Signin(1, "a", "a", StatusOnline)
+	r.h.Signin(1, "a", "a", StatusOnline, false)
 	r.st.ReadJSON("state.json", &after)
 	if after.Games.Direct != 12345 {
 		t.Error("nothing changed, so nothing should be written")
@@ -1292,7 +1292,7 @@ func (r *hubRig) join(number int, forPerson, account string) string {
 		r.t.Fatalf("%+v %v", res, err)
 	}
 	r.h.Connected(number, []byte{byte(number)}, 1)
-	id, _, err := r.h.Signin(number, account, account, StatusOnline)
+	id, _, err := r.h.Signin(number, account, account, StatusOnline, false)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -1356,10 +1356,10 @@ func TestAnInviteForSomeoneUsedByThemAddsTheirConsole(t *testing.T) {
 func TestAJoinedConsoleKnowsWhoIsOnTheOthers(t *testing.T) {
 	r := newHubRig(t)
 	me := r.console(1, "me")
-	kid, _, _ := r.h.Signin(1, "kid", "kid", StatusOnline)
-	r.h.Signin(1, "me", "me", StatusOnline)
+	kid, _, _ := r.h.Signin(1, "kid", "kid", StatusOnline, false)
+	r.h.Signin(1, "me", "me", StatusOnline, false)
 	r.join(2, me, "me")
-	if again, _, _ := r.h.Signin(2, "kid", "kid", StatusOnline); again != kid {
+	if again, _, _ := r.h.Signin(2, "kid", "kid", StatusOnline, false); again != kid {
 		t.Errorf("the kid on console 2 is someone new")
 	}
 }
@@ -1373,7 +1373,7 @@ func TestAnInviteUsedBySomeoneElseOnlyBringsNewPeople(t *testing.T) {
 	if danny == me || !st.AreFriends(me, danny) || st.Person(me).On(3) {
 		t.Errorf("%+v", st.People)
 	}
-	if other, _, _ := r.h.Signin(3, "me", "me", StatusOnline); other == me {
+	if other, _, _ := r.h.Signin(3, "me", "me", StatusOnline, false); other == me {
 		t.Error("my account on Danny's console is not me")
 	}
 }
@@ -1457,7 +1457,7 @@ func TestOfflineChosenOnOneConsoleHoldsOnAll(t *testing.T) {
 	if !hasChosen(r.events(2), StatusOffline) || hasChosen(r.events(1), StatusOffline) {
 		t.Error("console 2 hears it, console 1 said it")
 	}
-	_, chose, _ := r.h.Signin(2, "me", "me", StatusOnline)
+	_, chose, _ := r.h.Signin(2, "me", "me", StatusOnline, false)
 	if st := r.st.Snapshot(); !chose || !st.Person(me).ChoseOffline {
 		t.Error("a console signing in is told, and it is saved")
 	}
@@ -1628,5 +1628,66 @@ func TestTheInviteTheyUsedIsTheirCode(t *testing.T) {
 	st = r.st.Snapshot()
 	if p := st.Person(danny.ID); !slices.Equal(p.Consoles(), []int{4, 3}) || len(st.People) != 2 {
 		t.Errorf("Danny on both his consoles: %+v", st.People)
+	}
+}
+
+// An app that only joins says so at pairing and at sign-in. An invite made for someone who only
+// joins brings in someone else who only joins with no friendship, since neither could host, and
+// someone with a console as their friend.
+func TestTwoWhoOnlyJoinAreNeverMadeFriends(t *testing.T) {
+	r := newHubRig(t)
+	me := r.console(1, "me")
+	no := false
+	invite := func(forPerson string) store.Code {
+		return store.Code{ID: store.NewID(), Kind: store.CodeInvite, For: forPerson, Expires: r.clock.Add(time.Hour)}
+	}
+	pair := func(code store.Code, number int, account string) string {
+		t.Helper()
+		r.st.Update(func(st *store.State) error {
+			st.Codes = append(st.Codes, code)
+			st.NextConsole = number
+			return nil
+		})
+		if _, err := r.h.joinConsole(code, []byte{byte(number)}, consoleJoining{Account: account, Username: account, Hosts: &no}); err != nil {
+			t.Fatal(err)
+		}
+		st := r.st.Snapshot()
+		return st.PersonOn(number, account).ID
+	}
+	riley := pair(invite(me), 2, "riley")
+	sam := pair(invite(riley), 3, "sam")
+	st := r.st.Snapshot()
+	if !st.Person(riley).JoinsOnly || !st.Person(sam).JoinsOnly || st.Person(me).JoinsOnly {
+		t.Errorf("only the two on 2P Start are marked: %+v", st.People)
+	}
+	if !st.AreFriends(riley, me) || st.AreFriends(sam, riley) {
+		t.Errorf("riley is my friend, sam is not riley's: %+v", st.Friends)
+	}
+	if st.CodeOf(sam) == nil {
+		t.Error("sam is in all the same, with the invite as their own code")
+	}
+}
+
+// A 2P Start paired before it said so is marked at its next sign-in, and a sign-in that does not
+// say it is an app that hosts.
+func TestSigninSaysWhetherItHosts(t *testing.T) {
+	r := newHubRig(t)
+	id := r.console(1, "riley")
+	if _, _, err := r.h.Signin(1, "riley", "riley", StatusOnline, true); err != nil {
+		t.Fatal(err)
+	}
+	st := r.st.Snapshot()
+	if !st.Person(id).JoinsOnly {
+		t.Error("marked at sign-in")
+	}
+	r.h.Signin(1, "riley", "riley", StatusOnline, false)
+	st = r.st.Snapshot()
+	if st.Person(id).JoinsOnly {
+		t.Error("a sign-in with no hosts is one that hosts")
+	}
+	newcomer, _, _ := r.h.Signin(1, "sam", "sam", StatusOnline, true)
+	st = r.st.Snapshot()
+	if !st.Person(newcomer).JoinsOnly {
+		t.Error("someone new at sign-in is marked too")
 	}
 }

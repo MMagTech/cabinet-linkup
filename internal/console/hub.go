@@ -658,7 +658,8 @@ func cleanStatus(s string) bool {
 // Signin makes an account the console's current one, and says whether that person chose Offline. An
 // account new to this console and the consoles in with it appears on the owner's page, with no
 // friends. Whoever was signed in here before shows Offline, unless they are on another console.
-func (h *Hub) Signin(number int, account, username, status string) (string, bool, error) {
+// joinsOnly is the app saying it never hosts, as 2P Start does.
+func (h *Hub) Signin(number int, account, username, status string, joinsOnly bool) (string, bool, error) {
 	if !cleanWord(account, maxAccount) || !cleanWord(username, maxUsername) {
 		return "", false, ErrBadRequest
 	}
@@ -675,7 +676,7 @@ func (h *Hub) Signin(number int, account, username, status string) (string, bool
 			if st.CountOn(number) >= peoplePerConsole {
 				return false
 			}
-			st.People = append(st.People, store.Person{ID: store.NewID(), Console: number, Account: account, Username: username, LastSeen: h.now()})
+			st.People = append(st.People, store.Person{ID: store.NewID(), Console: number, Account: account, Username: username, LastSeen: h.now(), JoinsOnly: joinsOnly})
 			id = st.People[len(st.People)-1].ID
 			return true
 		}
@@ -683,6 +684,9 @@ func (h *Hub) Signin(number int, account, username, status string) (string, bool
 		changed := p.Use(number)
 		if p.Username != username {
 			p.Username, changed = username, true
+		}
+		if p.JoinsOnly != joinsOnly {
+			p.JoinsOnly, changed = joinsOnly, true
 		}
 		return changed
 	})

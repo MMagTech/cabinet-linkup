@@ -352,6 +352,12 @@ type consoleJoining struct {
 	Stream   int    `json:"stream"`
 	Account  string `json:"account"`
 	Username string `json:"username"`
+	Hosts    *bool  `json:"hosts"`
+}
+
+// joinsOnly reads `hosts`, which only an app that never hosts sends, as false.
+func joinsOnly(hosts *bool) bool {
+	return hosts != nil && !*hosts
 }
 
 type joinResult struct {
@@ -481,10 +487,13 @@ func (h *Hub) joinConsole(c store.Code, key []byte, j consoleJoining) (joinResul
 			p.Use(number)
 			p.Username, p.LastSeen = j.Username, h.now()
 		}
+		p.JoinsOnly = joinsOnly(j.Hosts)
 		person = p.ID
-		if c.Kind == store.CodeInvite && c.For != "" && st.Person(c.For) != nil && c.For != p.ID {
-			friend = c.For
-			st.AddFriends(p.ID, friend)
+		if f := st.Person(c.For); c.Kind == store.CodeInvite && f != nil && c.For != p.ID {
+			if store.CanPlay(p, f) {
+				friend = c.For
+				st.AddFriends(p.ID, friend)
+			}
 			if c.Note != "" && p.Note == "" {
 				p.Note = c.Note
 			}
@@ -764,6 +773,7 @@ type request struct {
 	Path     string `json:"path"`
 	Reason   string `json:"reason"`
 	Chosen   bool   `json:"chosen"`
+	Hosts    *bool  `json:"hosts"`
 }
 
 var errRemoved = errors.New("removed")
@@ -800,7 +810,7 @@ func (h *Handler) operate(ctx context.Context, number int, plain []byte) any {
 	h.hub.Seen(number)
 	switch q.Op {
 	case "signin":
-		id, chose, err := h.hub.Signin(number, q.Account, q.Username, q.Status)
+		id, chose, err := h.hub.Signin(number, q.Account, q.Username, q.Status, joinsOnly(q.Hosts))
 		if err != nil {
 			return failed(err)
 		}

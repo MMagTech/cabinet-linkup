@@ -203,6 +203,10 @@ id on a different RomM server is a different person. The server looks it up only
 console and the consoles in with it (below), to recognise the account after a reinstall and on
 another console, and shows only `username`. Only a reinstall code moves a console to a new key.
 
+An app that only joins and never hosts, as 2P Start, adds `"hosts": false` here and in `signin`, and
+missing means it hosts. Two people who both only join can never play, so the owner's page does not
+offer them to each other, and an invite made for one does not make the other its friend.
+
 A server, linking:
 
     {"kind": "server", "protocol": 1, "oldest": 1,
@@ -337,7 +341,7 @@ A console has one current account at a time. Every operation is that account's.
 
 | `op` | Fields | Answer |
 |---|---|---|
-| `signin` | `account`, `username`, `status` | `{"person": "<id>", "chosen": "online" or "offline"}`, `chosen` being the person's own choice. A new account appears on the owner's page, with no friends. The account signed in before this one shows Offline, unless it is on another console. |
+| `signin` | `account`, `username`, `status`; `hosts`: `false` from an app that only joins | `{"person": "<id>", "chosen": "online" or "offline"}`, `chosen` being the person's own choice. A new account appears on the owner's page, with no friends. The account signed in before this one shows Offline, unless it is on another console. |
 | `signout` | | |
 | `status` | `status`: `online`, `offline`, `linkedup`; `chosen`: `true` when the person chose Online or Offline, which then holds on all their consoles | |
 | `friends` | | `{"friends": [...]}` |
