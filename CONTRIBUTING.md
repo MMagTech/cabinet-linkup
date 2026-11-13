@@ -19,7 +19,9 @@
 | `ci/run-containers.sh` | Two linked containers and stand-in consoles against the real image |
 
 Each part owns its job and no other. Only `internal/admin` draws a page, only `internal/proof` touches
-keys, and only `internal/logfile` writes the log.
+keys, and only `internal/logfile` writes the log. Inside a part, each file has one job too, and is named
+for it: the package comments of `internal/console` and `internal/relay` list theirs, and a new job gets
+a file of its own rather than a few hundred lines in a file that does something else.
 
 ## Building and testing
 
@@ -80,8 +82,9 @@ than overwrite it, and going back means putting the copy from step 2 back.
 
 ## The rules
 
-CabinetOS's own rules apply here: search before you write, remove what you replace, no commented-out
-code, docs change with the code, and decisions in small files. These are this repository's:
+CabinetOS's own rules apply here: search before you write, a new job in a file of its own, remove what
+you replace, no commented-out code, docs change with the code, and decisions in small files. These are
+this repository's:
 
 - **`PROTOCOL.md` changes with the code,** in the same pull request, and changes only add: never rename
   or remove. A version number moves only on a real break.
