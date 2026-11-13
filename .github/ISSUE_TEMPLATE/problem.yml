@@ -1,0 +1,36 @@
+name: Something is wrong
+description: The server does something it should not, or does not do what it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **A security problem goes privately instead,** never in an issue: see
+        [SECURITY.md](https://github.com/MMagTech/cabinet-linkup/blob/main/SECURITY.md). Leave out
+        addresses, codes, passwords and the names of anybody's machines.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: On the admin page, Server, Settings, Version.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: The log
+      description: |
+        On the admin page, Server, Settings, Log: paste the last 200 lines. It never holds codes,
+        passwords, keys, internet addresses, usernames or game titles, so it is made to be pasted
+        here. If the server does not start, paste what its container's own
+        log says instead (on Unraid: Docker, the container's icon, Logs).
+      render: text
+    validations:
+      required: true

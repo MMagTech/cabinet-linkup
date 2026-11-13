@@ -1,6 +1,9 @@
-# Every pull request and every push to main: format, vet, the tests with the race detector,
-# known holes in the program's own dependencies, a build for each architecture, and the real
-# image with stand-in consoles against it.
+# Every pull request and every push to main: format, vet, staticcheck, the tests with the race
+# detector, known holes in the program's own dependencies, a build for each architecture, and the
+# real image with stand-in consoles against it. And three reads of the files themselves: nothing
+# private, long files (report only), and docs and comments that name a file that is not there.
+#
+# staticcheck and govulncheck are pinned here, and Dependabot does not see them: move each by hand.
 name: Checks
 
 on:
@@ -23,10 +26,12 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: Vet
         run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
       - name: Tests
         run: go test -race -count=1 ./...
       - name: Known holes
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Build amd64 and arm64
         run: |
           GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/cabinet-linkup
@@ -43,3 +48,40 @@ jobs:
         run: docker build -t cabinet-linkup:ci .
       - name: Two linked containers and stand-in consoles
         run: ./ci/run-containers.sh cabinet-linkup:ci
+
+  private:
+    name: Nothing private in a tracked file
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: ci/check-no-private.sh
+
+  # The two that hold the structure, as CabinetOS learned to (MMagTech/cabinetos#398, "Audit the
+  # code and restructure it for contributors (main.cpp is 20,000 lines)").
+  long-files:
+    name: Long files (report only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Source files over 1,500 lines
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            ci/check-long-files.sh "$BASE" "$HEAD"
+          else
+            ci/check-long-files.sh
+          fi
+
+  named-files:
+    name: Docs and comments name what is there
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: python3 -I ci/check-named-files.py
