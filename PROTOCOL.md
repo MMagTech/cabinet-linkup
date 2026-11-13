@@ -480,6 +480,248 @@ short peaks. Bytes are counted through the relay, saved now and then, and when t
 limit is reached the relay refuses everything until its reset day. Game packets stay
 encrypted between the two consoles, by WebRTC, so the relay cannot read them.
 
+## Between two consoles: the game
+
+Once a friend has joined, the two consoles connect to each other by WebRTC, and the game goes straight
+between them, or through a relay. The server only carries the connection details, sealed. The host runs
+the game and sends its picture and sound. The friend is player two: it shows the picture, plays the
+sound, and sends its controller. An app that only joins (`"hosts": false`) is always the friend, and
+needs only the friend's half of this. This is stream version 1.
+
+### Getting connected
+
+Each piece of connection details goes in a signal box of its own (`signal`, above), which CabinetOS
+seals to expire 5 minutes later. The box's `details` is JSON text, `{"g": <number>, "d": <text>}`. `g`
+is the connection's number, 1 to begin with (see "A drop"), and `d` is JSON text again, one of these:
+
+| `d` | From | |
+|---|---|---|
+| `{"hello": {"stream": 1, "oldest": 1, "h264": true, "h265": true}}` | The friend | Its first word, below |
+| `{"kind": "offer", "sdp": "..."}` | The host | |
+| `{"kind": "answer", "sdp": "..."}` | The friend | |
+| `{"ice": "candidate:...", "m": 0}` | Both | One ICE candidate, as it is found; `m` is the index of its media line |
+
+In order:
+
+1. **The join.** The friend's `join` answers with the session, and the host hears `joined`. Each then
+   asks its own server for `config` and for `relay`. Each takes the first STUN server in `config`'s list
+   that answers, and the first of the relay's `urls`, a `turn:` address it uses over UDP, with its
+   username and password. The server picks the relay: the host's server's first (see "The relay").
+2. **The hello.** The friend sends it straight after the join, before anything else. `h264` and `h265`
+   say which it can decode. `stream` is its stream version and `oldest` the oldest it still speaks, and
+   either missing reads as 1.
+3. **The host checks it.** A friend whose `stream` is below the host's is behind, and a host whose
+   `stream` is below the friend's `oldest` is behind. Either way the two do not connect: the host names
+   who is behind, sends `report` with `failed` and `behind`, and ends the session, and the friend hears
+   only `session_ended`. The host picks H.265 when both consoles can use it, and H.264 when only that;
+   with neither, they cannot play.
+4. **The offer.** Once it has the hello, `config` and `relay`, the host makes its connection, with the
+   picture, the sound and both data channels in it, and sends the offer. The friend makes its own once
+   it has `config` and `relay`, and answers. The host always offers, and the friend never does.
+5. **Candidates** go both ways as each side finds them. A piece that arrives before its side has made
+   its connection waits, and is used in order once it has. A console gathers UDP candidates only, on
+   its ports 47710 to 47714, so a friend's app needs UDP.
+6. **Connected.** Each side sends `report` with `direct`, or `relay` when its own end goes through a
+   relay, and again for each new connection (see "A drop"). With no connection 30 seconds after the
+   join, each gives up and sends `report` with `failed`.
+
+The connection is one bundle. The host's picture and sound are send-only, and the friend sends nothing
+on them but its RTCP reports, which both sides send about once a second. The friend asks for a lost
+packet again (NACK), the host resends it, and the friend waits up to 100 ms for the resend.
+
+### The data channels
+
+The host makes both, before its offer. The friend makes none, and takes them as they open.
+
+| Channel | Made | Carries |
+|---|---|---|
+| `fast` | Unordered, never resent (`maxRetransmits` 0) | Bytes: what a later message replaces, where a resend would only be late |
+| `control` | Ordered and reliable | Text: what must arrive |
+
+On `fast`, the first byte says what a message is. A reader ignores a first byte it does not know, and
+reads a message longer than it expects as far as it knows.
+
+| Byte | Name | From | Bytes | |
+|---|---|---|---|---|
+| `P` (0x50) | Pad | The friend | 44, or 20 from an older console | The controller, below |
+| `R` (0x52) | Rumble | The host | 8 | Below |
+| `B` (0x42) | Beat | Both | 9 | Every 250 ms. Then the sender's own clock in milliseconds, a signed 64-bit number |
+| `b` (0x62) | Beat back | Both | 9 | The beat it answers, its first byte changed to `b`, sent at once |
+| `K` (0x4B) | Full picture | The friend | 1 | Asks the host for a fresh full picture (see "The picture") |
+
+A beat's clock means something only to its sender, which takes the difference as the round trip, for
+its log.
+
+On `control`, every message is text:
+
+| Text | From | |
+|---|---|---|
+| `picture:1` | The host | The game's picture and sound are going out |
+| `picture:0` | The host | Something else is on the host's screen, and no picture and no sound go out |
+| `bye` | Both | Goodbye (see "Goodbye") |
+| `p:` and JSON | Both | A word for the other console's screens (see "Words between the screens") |
+
+### The controller
+
+From the friend, each time its state changes, and every tenth of a second when it does not. It starts as
+soon as the two are connected: the host gives player two the motion sensors that `senses` names, and
+before the first game waits up to a second to hear a state. While the friend's own screens are over the
+picture, it sends its controller let go: no button, sticks centred, no turning, and held at its last
+tilt.
+
+Packed, with nothing between fields, and every number little-endian:
+
+| Offset | Bytes | Field | |
+|---|---|---|---|
+| 0 | 1 | `tag` | `P` |
+| 1 | 1 | `senses` | The motion sensors the controller has: 1 an accelerometer, 2 a gyroscope, added together |
+| 2 | 2 | `seq` | Unsigned, one more with each message |
+| 4 | 4 | `buttons` | A bit for each button held, numbered below |
+| 8 | 12 | `axes` | Six signed 16-bit numbers, in the order below |
+| 20 | 12 | `accel` | Three 32-bit floats, x, y, z: metres per second squared, gravity included |
+| 32 | 12 | `gyro` | Three 32-bit floats, x, y, z: radians per second |
+
+**Only the highest `seq` counts,** since messages on `fast` can be lost and overtake each other. The
+host takes a state whose `seq`, less the last it took, is above 0 as a signed 16-bit number, so the count
+can wrap, or is 1000 or more below it, which is a count started again. It drops the rest.
+
+**The buttons and axes are numbered as SDL 3 numbers them,** listed here so nobody needs SDL. Bit 5,
+Guide, is the console's own button, and a friend never sets it.
+
+| Bit | Button | Bit | Button |
+|---|---|---|---|
+| 0 | South: the bottom face button, A on an Xbox pad | 13 | D-pad left |
+| 1 | East: the right face button, B | 14 | D-pad right |
+| 2 | West: the left face button, X | 15 | Misc 1: Share, Capture or a microphone button |
+| 3 | North: the top face button, Y | 16 | Right paddle 1, the upper |
+| 4 | Back | 17 | Left paddle 1, the upper |
+| 5 | Guide | 18 | Right paddle 2, the lower |
+| 6 | Start | 19 | Left paddle 2, the lower |
+| 7 | Left stick, pressed | 20 | Touchpad, pressed |
+| 8 | Right stick, pressed | 21 | Misc 2 |
+| 9 | Left shoulder | 22 | Misc 3 |
+| 10 | Right shoulder | 23 | Misc 4 |
+| 11 | D-pad up | 24 | Misc 5 |
+| 12 | D-pad down | 25 | Misc 6 |
+
+| Axis | | Range |
+|---|---|---|
+| 0 | Left stick, across | -32768 left to 32767 right |
+| 1 | Left stick, up and down | -32768 up to 32767 down |
+| 2 | Right stick, across | As the left |
+| 3 | Right stick, up and down | As the left |
+| 4 | Left trigger | 0 let go to 32767 pressed all the way |
+| 5 | Right trigger | As the left |
+
+**The tilt** is SDL's too. For a controller held in front of you, x runs from left to right, y from
+bottom to top, and z from away from you to towards you, so a controller lying flat reads about +9.81 on
+y. A turn is positive when it looks anticlockwise from the positive end of its axis. A sensor that
+`senses` does not name reads 0.
+
+**An older console** sends 20 bytes, as far as the end of `axes`, and its second byte is spare: the host
+reads it as a controller with no motion sensors. An older host reads a newer friend's first 20 bytes and
+ignores the rest. Anything under 20 bytes is not a pad.
+
+### Rumble
+
+From the host, each time a game rumbles player two. Packed and little-endian:
+
+| Offset | Bytes | Field | |
+|---|---|---|---|
+| 0 | 1 | `tag` | `R` |
+| 1 | 1 | `reserved` | 0 |
+| 2 | 2 | `low` | The low-frequency motor, the left: 0 to 65535 |
+| 4 | 2 | `high` | The high-frequency motor, the right: 0 to 65535 |
+| 6 | 2 | `ms` | How long, which is always 300 |
+
+A CabinetOS friend rumbles for 300 ms, whatever `ms` says. Each rumble replaces the one before, as SDL's
+own does, so 0 and 0 stops it. It travels on `fast`, so one can be lost.
+
+### The picture
+
+H.265 or H.264 (step 3 above), payload type 96, in RTP packets of at most 1200 bytes.
+
+- **Its size** is the host's own screen's, at most 1080 lines high: a 4K host sends 1920 by 1080. A
+  host whose connection cannot keep up drops from 1080 lines to 720, and climbs back when it can, so
+  the size can change in the middle of a game. Each new size starts with a full picture.
+- **Its colours are BT.601, limited range.** A decoder guesses BT.709 at these sizes, so the friend
+  states BT.601 itself.
+- **Each picture can be shown the moment it is decoded:** there are no B-frames and one reference
+  frame. CabinetOS's friend shows each one without waiting on its timestamp, and of those waiting keeps
+  only the newest.
+- **A full picture comes** at least every 600 frames, at each bitrate step, whenever the host's picture
+  comes back on, and whenever the friend asks, with the parameter sets in front of each one.
+- **The friend asks for one** with `K`. A picture that loses a whole frame's packets freezes the stream
+  until the next full picture, and that one can lose a packet too. CabinetOS's friend asks once by
+  RTCP, the usual WebRTC way, and that is not enough. So while packets are arriving and no picture has
+  come out of the decoder for 150 ms, the friend sends `K`, and again every 150 ms until one does.
+- **The bitrate is steady, at most 18 Mbit/s,** and the host steps it by the loss the friend's RTCP
+  reports show: 18, 12 and 8 Mbit/s at the host's own size, then 6 and 3.5 Mbit/s, at 720 lines when
+  the host's own is 1080. More than 3% lost for 2 seconds in a row is a step down, and under 0.5% for 20
+  seconds a step up. Losing more than 3% for 6 seconds at the lowest step tells both consoles the
+  connection is too slow (`slow`, below), at most every 10 minutes.
+
+The host starts with its picture off: before the first `picture:1` there is black at most.
+`picture:0` means something other than the game is on the host's screen, such as its menus: no picture
+and no sound go out until `picture:1`.
+
+### The sound
+
+Opus at 48,000 Hz, stereo, payload type 97, in 10 ms pieces at a steady 128 kbit/s. It stops and starts
+with the picture.
+
+The host's sound clock is not the friend's: one host was measured sending 47,960.6 samples a second by
+the friend's clock, and a friend playing at its own pace ran dry after 30 to 70 seconds. So CabinetOS's
+friend plays the sound through a queue of its own and trims its pace to keep the queue steady, by at
+most 2000 parts per million either way. It keeps 40 ms in hand to begin with, 20 ms more after each
+stall it did not cover, up to 100 ms, and 10 ms less after each two calm minutes. It waits up to 60 ms
+for a missing piece, then lets Opus fill the gap. A queue dry for more than 300 ms is the host gone
+quiet, not the network.
+
+### Words between the screens
+
+`p:` then a JSON object whose `t` is the word. A reader ignores a word, or a field, it does not know.
+
+| `t` | From | Fields | |
+|---|---|---|---|
+| `starting` | The host | `game` | A game is starting for both, by its name, which need not be the invite's |
+| `place` | The host | `x`, `y`, `w`, `h` | Where the game sits on the host's screen, in points of a 1920 by 1080 canvas, so the friend can draw the bars around it as the host's TV does. Said when a game CabinetOS draws itself first shows, and whenever it moves; an emulator in a window of its own says nothing |
+| `paused`, `resumed` | The host | | The host's own pause menu opened, or closed |
+| `idle` | The host | | Neither player has pressed anything for a while, and both pause |
+| `quit` | The host | | The game ended. The session goes on, and the friend waits for the next |
+| `ended` | The host | | The host ended the session |
+| `slow` | The host | | The connection cannot keep up, even at the lowest step |
+| `pause` | The friend | | The friend paused, and the host's game stops too |
+| `leave` | The friend | | The friend left. The host's game carries on without player two |
+| `resume` | Both | | Carry on, after a pause or `idle` |
+| `press` | Both | | Somebody pressed something on this side, said at most every 2 seconds, so neither console counts the two as idle |
+
+### A drop
+
+Anything heard on either channel counts, and the beat is there so that a quiet game still says
+something.
+
+- **A drop** is 2 seconds with nothing heard. Under that, nothing shows: the friend's last state holds,
+  and lost packets are resent.
+- **Back** is anything heard again. The host then sends a full picture, and `picture:1` or `picture:0`
+  again. On a new connection that word can go before `control` is open, and be lost, so a friend keeps
+  the last `picture:` it heard.
+- **A new connection** is only ever the host's to make. After 8 seconds with nothing heard, and then at
+  most every 15 seconds while it lasts, the host makes a fresh connection for the same game, raises `g`
+  by one, and sends a new offer and new candidates under it. A friend that gets a piece with a higher
+  `g` than its own drops its connection, makes a new one, and answers under that `g`. Either side drops
+  a piece under a lower `g` than its own. The hello is not sent again, and the codec stays the same.
+- **Giving up** is the friend's. After a minute of drop, CabinetOS's friend sends `end`, and the
+  host hears `session_ended`.
+
+### Goodbye
+
+- **A person ends it.** The friend says `leave`, or the host says `ended`, and then sends `end` to its
+  server, whose `session_ended` reaches the other console.
+- **`bye` is from a console going away:** its LinkUp program stopping, or its main program going while
+  a game is on. 2P Start says it when it quits. Whoever hears it takes the session as over, and on the
+  host the game carries on without player two.
+
 ## What a hacked server gets
 
 Usernames, who is friends with whom, the owner's notes, console and server public keys, the
