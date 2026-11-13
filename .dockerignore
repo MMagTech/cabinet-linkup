@@ -5,3 +5,4 @@ bin
 unraid
 *.md
 compose*.yaml
+docs
