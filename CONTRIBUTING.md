@@ -16,6 +16,7 @@
 | `internal/admin` | The admin page, with `html/template` and no JavaScript framework |
 | `internal/standin` | A stand-in console and what the tests share: it speaks PROTOCOL.md as the real one must |
 | `internal/update` | The update notice, asking GitHub |
+| `internal/text` | The one check on words from outside: which characters nobody can see |
 | `ci/run-containers.sh` | Two linked containers and stand-in consoles against the real image |
 
 Each part owns its job and no other. Only `internal/admin` draws a page, only `internal/proof` touches

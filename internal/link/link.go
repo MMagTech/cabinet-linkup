@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/MMagTech/cabinet-linkup/internal/console"
@@ -21,6 +20,7 @@ import (
 	"github.com/MMagTech/cabinet-linkup/internal/proof"
 	"github.com/MMagTech/cabinet-linkup/internal/relay"
 	"github.com/MMagTech/cabinet-linkup/internal/store"
+	"github.com/MMagTech/cabinet-linkup/internal/text"
 )
 
 const (
@@ -722,19 +722,7 @@ func cleanUsername(s string) bool {
 
 // cleanLine holds a name or an address from another server to what a person typed: one short line.
 func cleanLine(s string, limit int) bool {
-	if s == "" || utf8.RuneCountInString(s) > limit || !utf8.ValidString(s) {
-		return false
-	}
-	return !containsControl(s)
-}
-
-func containsControl(s string) bool {
-	for _, r := range s {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return true
-		}
-	}
-	return false
+	return s != "" && utf8.RuneCountInString(s) <= limit && text.Plain(s)
 }
 
 // heard saves what a linked server said: its name and address, and its people in a pair. Anyone

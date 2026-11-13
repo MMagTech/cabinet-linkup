@@ -2,6 +2,7 @@ package console
 
 import (
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"github.com/MMagTech/cabinet-linkup/internal/store"
@@ -50,13 +51,7 @@ func goodInviteID(id string) bool {
 func (h *Hub) knockAllowedLocked(from, to string) bool {
 	key := from + "|" + to
 	now := h.now()
-	cutoff := now.Add(-knocksWindow)
-	kept := h.knocks[key][:0]
-	for _, at := range h.knocks[key] {
-		if at.After(cutoff) {
-			kept = append(kept, at)
-		}
-	}
+	kept := recent(h.knocks[key], now.Add(-knocksWindow))
 	if len(kept) >= knocksAllowed {
 		h.knocks[key] = kept
 		return false
@@ -104,7 +99,7 @@ func (h *Hub) Invite(number int, id, friend, sealed string) (string, error) {
 	}
 	inv := &invite{id: id, from: me, fromConsole: number, fromHere: true, sealed: sealed, expires: h.now().Add(inviteLife)}
 
-	if pairID, remoteFriend := cutPrefix(friend, "p:"); remoteFriend {
+	if pairID, remoteFriend := strings.CutPrefix(friend, "p:"); remoteFriend {
 		link, pair := findPair(&st, me, pairID)
 		if pair == nil {
 			h.mu.Unlock()
@@ -141,13 +136,6 @@ func (h *Hub) Invite(number int, id, friend, sealed string) (string, error) {
 	h.pushOn(inv, friend, Event{Type: "invite", Invite: id, From: me, Sealed: sealed})
 	h.changedLocked(&st, me)
 	return id, nil
-}
-
-func cutPrefix(s, prefix string) (string, bool) {
-	if len(s) > len(prefix) && s[:len(prefix)] == prefix {
-		return s[len(prefix):], true
-	}
-	return "", false
 }
 
 func findPair(st *store.State, me, pairID string) (*store.Link, *store.Pair) {

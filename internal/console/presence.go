@@ -2,10 +2,9 @@ package console
 
 import (
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/MMagTech/cabinet-linkup/internal/store"
+	"github.com/MMagTech/cabinet-linkup/internal/text"
 )
 
 // live is one console that is connected now.
@@ -205,17 +204,9 @@ func (h *Hub) StreamOf(number int) int {
 	return 0
 }
 
+// cleanWord holds a word a console sends to its limit in bytes, on one line.
 func cleanWord(s string, limit int) bool {
-	return s != "" && len(s) <= limit && utf8.ValidString(s) && !containsControl(s)
-}
-
-func containsControl(s string) bool {
-	for _, r := range s {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return true
-		}
-	}
-	return false
+	return s != "" && len(s) <= limit && text.Plain(s)
 }
 
 func cleanStatus(s string) bool {

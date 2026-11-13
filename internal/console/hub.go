@@ -190,6 +190,8 @@ func (h *Hub) Tick() {
 	}
 }
 
+// recent keeps the times after cutoff, in the list's own memory. Pairing's limits on guessing a code
+// and the limit on knocks both count with it.
 func recent(list []time.Time, cutoff time.Time) []time.Time {
 	kept := list[:0]
 	for _, at := range list {

@@ -9,10 +9,7 @@ import (
 
 // remote is what a linked server last said about one of its people.
 type remote struct {
-	status   string
-	username string
-	key      []byte
-	stream   int
+	status string
 }
 
 // RemoteStatus saves what a linked server said about its people. Only people in a pair are
