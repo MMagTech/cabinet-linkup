@@ -18,6 +18,7 @@
 | `internal/update` | The update notice, asking GitHub |
 | `internal/text` | The one check on words from outside: which characters nobody can see |
 | `ci/run-containers.sh` | Two linked containers and stand-in consoles against the real image |
+| `ci/check-known-holes.sh` | Known holes in this code, with the Go the real image's program was built with |
 | `ci/check-no-private.sh` | No private address or home folder's path in a tracked file, but the examples it lists |
 | `ci/check-named-files.py` | Docs and comments that name a file that is not there |
 | `ci/check-long-files.sh` | Source files over 1,500 lines, report only |
@@ -44,16 +45,22 @@ python3 ci/check-named-files.py
 ci/check-long-files.sh
 ```
 
-The image, and two linked containers with stand-in consoles against it:
+The image, known holes in the Go it was built with, and two linked containers with stand-in consoles
+against it:
 
 ```bash
 docker build -t cabinet-linkup:dev .
+./ci/check-known-holes.sh cabinet-linkup:dev
 ./ci/run-containers.sh cabinet-linkup:dev
 ```
 
-CI runs all of this on every pull request, with staticcheck, `govulncheck` and a build for amd64 and
-arm64. `.github/workflows/checks.yml` pins staticcheck's and `govulncheck`'s versions; run them as it
-does. staticcheck must pass, and so must every check but the long files, which only reports.
+Known holes are checked with the image's Go, not the newest Go that `go.mod` allows: the image is what
+owners run.
+
+CI runs all of this on every pull request, with staticcheck and a build for amd64 and arm64.
+`.github/workflows/checks.yml` pins staticcheck's version and `ci/check-known-holes.sh` pins
+`govulncheck`'s; run them as they do. staticcheck must pass, and so must every check but the long
+files, which only reports.
 
 Consoles on one home network can only reach a relay that may send to private addresses, which a real
 server refuses. `LINKUP_TEST_RELAY_PRIVATE=1` allows it, and the log says so. It is for test servers only
