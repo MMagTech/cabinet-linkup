@@ -1,7 +1,7 @@
 # Two stages, and almost nothing in the second: one program, the certificates it needs to
 # ask GitHub about updates, and an empty data folder. No shell, no package manager, nothing
 # else to patch. Run it with a read-only filesystem; it writes only to /data.
-FROM docker.io/library/golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS build
+FROM docker.io/library/golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS build
 ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
